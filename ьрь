@@ -1,0 +1,28 @@
+# 1. Грамотная обработка ошибок БД
+try:
+    cursor.execute(...)
+    conn.commit()
+except sqlite3.IntegrityError:
+    # Обработка дубликатов
+except sqlite3.Error as e:
+    # Логирование и уведомление пользователя
+
+# 2. Адаптивный интерфейс
+self.columnconfigure(0, weight=1)
+widget.pack(fill="both", expand=True)
+
+# 3. Подтверждение опасных действий
+if messagebox.askyesno("Подтверждение", "Удалить запись?"):
+    # выполнить удаление
+
+# 4. Поиск с "живыми" результатами
+self.search_entry.bind("<KeyRelease>", self.auto_search)
+
+# Для стилизации интерфейса
+pip install customtkinter ttkbootstrap
+
+# Для работы с Excel/PDF (отчеты)
+pip install openpyxl reportlab
+
+# Для тестирования
+pip install pytest
