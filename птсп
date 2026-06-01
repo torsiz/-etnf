@@ -1,0 +1,680 @@
+your_project/
+│
+├── main.py              # Точка входа, главное окно, авторизация
+├── cart_window.py       # Окно корзины и логика заказов
+├── database.py          # Работа с SQLite (модели, CRUD, инициализация)
+├── theme_manager.py     # Управление цветовыми темами (белая/темная)
+├── assets/              # Папка с картинками, логотипами, default.png
+│   └── default.png      # Картинка-заглушка для товаров
+└── store.db             # Файл базы данных (создается автоматически)
+
+
+import sqlite3
+import bcrypt
+from datetime import datetime
+from typing import List, Tuple, Optional, Dict, Any
+
+DATABASE_NAME = "store.db"
+
+def init_db():
+    """Инициализация базы данных: создание таблиц и тестовых данных."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+
+    # Таблица пользователей
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            failed_attempts INTEGER DEFAULT 0,
+            is_blocked BOOLEAN DEFAULT 0
+        )
+    ''')
+
+    # Таблица товаров
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            price REAL NOT NULL,
+            discount REAL DEFAULT 0,
+            image_path TEXT
+        )
+    ''')
+
+    # Таблица заказов
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            total_sum REAL NOT NULL,
+            order_date TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+
+    # Таблица позиций заказа (связь многие-ко-многим)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS order_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            quantity INTEGER NOT NULL,
+            price_at_time REAL NOT NULL,
+            FOREIGN KEY (order_id) REFERENCES orders (id),
+            FOREIGN KEY (product_id) REFERENCES products (id)
+        )
+    ''')
+
+    # Заполнение тестовыми товарами, если таблица пуста
+    cursor.execute("SELECT COUNT(*) FROM products")
+    if cursor.fetchone()[0] == 0:
+        test_products = [
+            ("Игровая мышь Logitech", "Беспроводная мышь с RGB подсветкой", 4500.00, 15, "mouse.png"),
+            ("Механическая клавиатура", "Red Switch, полная раскладка", 8500.00, 25, "keyboard.png"),
+            ("Монитор 27\"", "IPS, 144Hz, 1ms", 22000.00, 10, "monitor.png"),
+            ("Коврик для мыши", "Большой размер с подсветкой", 1200.00, 0, "pad.png"),
+            ("USB Hub", "4 порта USB 3.0", 850.00, 5, "hub.png"),
+        ]
+        cursor.executemany("INSERT INTO products (name, description, price, discount, image_path) VALUES (?,?,?,?,?)", test_products)
+
+    # Создание тестового пользователя для удобства (логин: admin, пароль: admin)
+    hashed = bcrypt.hashpw("admin".encode('utf-8'), bcrypt.gensalt())
+    try:
+        cursor.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", ("admin", hashed))
+    except sqlite3.IntegrityError:
+        pass  # Пользователь уже существует
+
+    conn.commit()
+    conn.close()
+
+def register_user(username: str, password: str) -> bool:
+    """Регистрация нового пользователя с хешированием пароля."""
+    try:
+        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, hashed))
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.IntegrityError:
+        return False  # Пользователь уже существует
+
+def authenticate_user(username: str, password: str) -> Tuple[bool, str, Optional[int]]:
+    """
+    Аутентификация пользователя с проверкой блокировки.
+    Возвращает: (Успех, Сообщение, ID_пользователя)
+    """
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    
+    # Получаем данные пользователя
+    cursor.execute("SELECT id, password_hash, failed_attempts, is_blocked FROM users WHERE username = ?", (username,))
+    user = cursor.fetchone()
+    
+    if not user:
+        conn.close()
+        return False, "Пользователь не найден", None
+    
+    user_id, hashed, attempts, blocked = user
+    
+    if blocked:
+        conn.close()
+        return False, "Учетная запись заблокирована. Обратитесь к администратору.", None
+    
+    # Проверка пароля
+    if bcrypt.checkpw(password.encode('utf-8'), hashed):
+        # Успешный вход: сброс счетчика попыток
+        cursor.execute("UPDATE users SET failed_attempts = 0 WHERE id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+        return True, "Успешный вход", user_id
+    else:
+        # Неудачная попытка: инкремент счетчика
+        attempts += 1
+        if attempts >= 3:
+            cursor.execute("UPDATE users SET failed_attempts = ?, is_blocked = 1 WHERE id = ?", (attempts, user_id))
+            conn.commit()
+            conn.close()
+            return False, "Превышено количество попыток. Аккаунт заблокирован.", None
+        else:
+            cursor.execute("UPDATE users SET failed_attempts = ? WHERE id = ?", (attempts, user_id))
+            conn.commit()
+            conn.close()
+            return False, f"Неверный пароль. Осталось попыток: {3 - attempts}", None
+
+def get_products(search_term: str = "", discount_filter: str = "Без сортировки") -> List[Dict[str, Any]]:
+    """
+    Получение списка товаров с фильтрацией по поиску и скидке.
+    discount_filter может быть: 'Без сортировки', 'от 0% до 14.99%', 'от 15% до 24.99%', 'более 25%'
+    """
+    conn = sqlite3.connect(DATABASE_NAME)
+    conn.row_factory = sqlite3.Row  # Для доступа по имени колонки
+    cursor = conn.cursor()
+    
+    query = "SELECT id, name, description, price, discount, image_path FROM products WHERE 1=1"
+    params = []
+    
+    # Поиск по названию или описанию
+    if search_term:
+        query += " AND (name LIKE ? OR description LIKE ?)"
+        params.extend([f"%{search_term}%", f"%{search_term}%"])
+    
+    # Фильтрация по скидке (применяется до сортировки)
+    if discount_filter == "от 0% до 14.99%":
+        query += " AND discount BETWEEN 0 AND 14.99"
+    elif discount_filter == "от 15% до 24.99%":
+        query += " AND discount BETWEEN 15 AND 24.99"
+    elif discount_filter == "более 25%":
+        query += " AND discount > 25"
+    # "Без сортировки" — не добавляем условие
+    
+    # В задании сказано "Сортировка должна применяться только после нажатия", но по сути это фильтрация по диапазону
+    # Просто выполняем запрос
+    cursor.execute(query, params)
+    products = [dict(row) for row in cursor.fetchall()]
+    
+    conn.close()
+    return products
+
+def get_product_by_id(product_id: int) -> Optional[Dict[str, Any]]:
+    """Получение товара по ID."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, description, price, discount, image_path FROM products WHERE id = ?", (product_id,))
+    product = cursor.fetchone()
+    conn.close()
+    return dict(product) if product else None
+
+def save_order(user_id: int, cart_items: List[Tuple[int, int, float]]) -> bool:
+    """
+    Сохранение заказа в БД.
+    cart_items: список кортежей (product_id, quantity, price_at_time)
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        
+        total_sum = sum(qty * price for _, qty, price in cart_items)
+        order_date = datetime.now().isoformat()
+        
+        # Создаем заказ
+        cursor.execute(
+            "INSERT INTO orders (user_id, total_sum, order_date) VALUES (?, ?, ?)",
+            (user_id, total_sum, order_date)
+        )
+        order_id = cursor.lastrowid
+        
+        # Сохраняем позиции
+        for product_id, quantity, price in cart_items:
+            cursor.execute(
+                "INSERT INTO order_items (order_id, product_id, quantity, price_at_time) VALUES (?, ?, ?, ?)",
+                (order_id, product_id, quantity, price)
+            )
+        
+        conn.commit()
+        conn.close()
+        return True
+
+
+
+import customtkinter as ctk
+from tkinter import messagebox, PhotoImage
+from PIL import Image
+import os
+from database import *
+from cart_window import open_cart
+from theme_manager import switch_theme, apply_theme
+from functools import partial
+
+# Настройка внешнего вида CustomTkinter
+ctk.set_appearance_mode("System")  # Modes: "System", "Dark", "Light"
+ctk.set_default_color_theme("green")  # Themes: "blue", "green", "dark-blue"
+
+class ProductCard(ctk.CTkFrame):
+    """Виджет карточки товара (плитка)."""
+    def __init__(self, master, product_data, add_to_cart_callback, **kwargs):
+        super().__init__(master, **kwargs)
+        self.product_data = product_data
+        self.add_to_cart_callback = add_to_cart_callback
+        self.configure(corner_radius=10, border_width=1, border_color="gray70")
+        
+        # Контейнер для левой части (изображение)
+        self.image_frame = ctk.CTkFrame(self, width=80, height=80, fg_color="transparent")
+        self.image_frame.pack(side="left", padx=10, pady=10)
+        self.image_frame.pack_propagate(False)
+        
+        # Загрузка изображения или заглушки
+        image_path = f"assets/{product_data['image_path']}" if product_data['image_path'] else "assets/default.png"
+        if not os.path.exists(image_path):
+            image_path = "assets/default.png"
+        
+        try:
+            img = Image.open(image_path)
+            img = img.resize((70, 70), Image.Resampling.LANCZOS)
+            self.photo = ctk.CTkImage(light_image=img, dark_image=img, size=(70, 70))
+            self.image_label = ctk.CTkLabel(self.image_frame, image=self.photo, text="")
+            self.image_label.pack(expand=True)
+        except:
+            self.image_label = ctk.CTkLabel(self.image_frame, text="Нет фото", font=("Arial", 10))
+            self.image_label.pack(expand=True)
+        
+        # Центральная часть (название + описание)
+        self.info_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.info_frame.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        
+        self.name_label = ctk.CTkLabel(self.info_frame, text=product_data['name'], 
+                                       font=ctk.CTkFont(size=14, weight="bold"), anchor="w")
+        self.name_label.pack(anchor="w")
+        
+        self.desc_label = ctk.CTkLabel(self.info_frame, text=product_data['description'][:50] + "...", 
+                                       font=ctk.CTkFont(size=11), anchor="w")
+        self.desc_label.pack(anchor="w", pady=(5, 0))
+        
+        # Правая часть (цена)
+        self.price_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.price_frame.pack(side="right", padx=10, pady=10)
+        
+        final_price = product_data['price'] * (1 - product_data['discount'] / 100)
+        
+        self.current_price = ctk.CTkLabel(self.price_frame, text=f"{final_price:.2f} ₽", 
+                                          font=ctk.CTkFont(size=16, weight="bold"), text_color="#359A85")
+        self.current_price.pack(anchor="e")
+        
+        if product_data['discount'] > 0:
+            self.old_price = ctk.CTkLabel(self.price_frame, text=f"{product_data['price']:.2f} ₽", 
+                                          font=ctk.CTkFont(size=11), text_color="gray")
+            self.old_price.pack(anchor="e")
+            # Перечеркивание (имитация)
+            self.old_price.configure(text_color_disabled="gray")
+    
+    def highlight(self, color="#359A85"):
+        """Подсветка карточки при выборе."""
+        self.configure(border_color=color, border_width=2)
+    
+    def unhighlight(self):
+        """Сброс подсветки."""
+        self.configure(border_color="gray70", border_width=1)
+
+class MainApp(ctk.CTk):
+    def __init__(self, user_id):
+        super().__init__()
+        
+        self.user_id = user_id
+        self.cart = []  # Список кортежей (product_id, quantity, price_at_time)
+        self.selected_product_id = None
+        self.current_theme = "light"  # 'light' или 'dark'
+        
+        # Настройка окна
+        self.title("Магазин электроники — ООО 'ТехноМаркет'")
+        self.geometry("1200x700")
+        self.minsize(900, 500)
+        
+        # Инициализация БД
+        init_db()
+        
+        # Создание интерфейса
+        self.create_header()
+        self.create_filter_bar()
+        self.create_products_area()
+        self.create_footer()
+        
+        # Загрузка товаров
+        self.load_products()
+        
+        # Привязка обработчиков
+        self.bind("<Configure>", self.on_resize)
+    
+    def create_header(self):
+        """Создание шапки приложения (логотип, переключение темы)."""
+        self.header_frame = ctk.CTkFrame(self, height=60, corner_radius=0)
+        self.header_frame.pack(fill="x", pady=(0, 10))
+        self.header_frame.pack_propagate(False)
+        
+        # Логотип по центру
+        self.logo_label = ctk.CTkLabel(self.header_frame, text="ТЕХНОМАРКЕТ", 
+                                       font=ctk.CTkFont(size=24, weight="bold"), text_color="#359A85")
+        self.logo_label.pack(side="left", expand=True)
+        
+        # Кнопка переключения темы справа
+        self.theme_btn = ctk.CTkButton(self.header_frame, text="🌙", width=40, 
+                                       command=self.toggle_theme)
+        self.theme_btn.pack(side="right", padx=20)
+    
+    def create_filter_bar(self):
+        """Панель поиска и фильтрации."""
+        self.filter_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.filter_frame.pack(fill="x", padx=20, pady=(0, 10))
+        
+        self.search_entry = ctk.CTkEntry(self.filter_frame, placeholder_text="Поиск по названию или описанию...", width=300)
+        self.search_entry.pack(side="left", padx=(0, 10))
+        
+        self.sort_option = ctk.CTkOptionMenu(self.filter_frame, 
+                                             values=["Без сортировки", "от 0% до 14.99%", "от 15% до 24.99%", "более 25%"],
+                                             width=200)
+        self.sort_option.pack(side="left", padx=(0, 10))
+        self.sort_option.set("Без сортировки")
+        
+        self.search_btn = ctk.CTkButton(self.filter_frame, text="Найти", command=self.load_products, width=100)
+        self.search_btn.pack(side="left")
+    
+    def create_products_area(self):
+        """Область со скроллируемым списком товаров."""
+        self.products_container = ctk.CTkScrollableFrame(self, label_text="Каталог товаров")
+        self.products_container.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+    
+    def create_footer(self):
+        """Нижняя панель со счетчиком товаров и кнопкой корзины."""
+        self.footer_frame = ctk.CTkFrame(self, height=50, corner_radius=0)
+        self.footer_frame.pack(fill="x", side="bottom")
+        self.footer_frame.pack_propagate(False)
+        
+        self.counter_label = ctk.CTkLabel(self.footer_frame, text="Показано 0 из 0 товаров", font=ctk.CTkFont(size=12))
+        self.counter_label.pack(side="left", padx=20)
+        
+        self.cart_btn = ctk.CTkButton(self.footer_frame, text="🛒 Корзина (0)", command=self.open_cart_window, 
+                                      width=150, fg_color="#359A85", hover_color="#2A6F5F")
+        self.cart_btn.pack(side="right", padx=20)
+    
+    def load_products(self):
+        """Загрузка товаров из БД с применением фильтров и отображение в виде карточек."""
+        # Очистка старых карточек
+        for widget in self.products_container.winfo_children():
+            widget.destroy()
+        
+        search_text = self.search_entry.get()
+        filter_value = self.sort_option.get()
+        
+        products = get_products(search_text, filter_value)
+        
+        # Отображение счетчика
+        self.counter_label.configure(text=f"Показано {len(products)} из {len(products)} товаров")
+        
+        # Создание карточек в сетке
+        row = 0
+        col = 0
+        max_cols = 3
+        
+        for product in products:
+            card = ProductCard(self.products_container, product, self.add_to_cart, 
+                               width=350, height=120)
+            card.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
+            
+            # Привязка событий для выбора карточки
+            card.bind("<Button-1>", lambda e, p=product['id']: self.select_product(p))
+            for child in card.winfo_children():
+                child.bind("<Button-1>", lambda e, p=product['id']: self.select_product(p))
+            
+            # Привязка контекстного меню (правая кнопка мыши)
+            card.bind("<Button-3>", lambda e, p=product: self.show_context_menu(e, p))
+            for child in card.winfo_children():
+                child.bind("<Button-3>", lambda e, p=product: self.show_context_menu(e, p))
+            
+            col += 1
+            if col >= max_cols:
+                col = 0
+                row += 1
+        
+        # Настройка весов колонок для равномерного распределения
+        for i in range(max_cols):
+            self.products_container.grid_columnconfigure(i, weight=1)
+    
+    def select_product(self, product_id):
+        """Выделение выбранного товара."""
+        self.selected_product_id = product_id
+        # Сброс подсветки у всех карточек
+        for widget in self.products_container.winfo_children():
+            if isinstance(widget, ProductCard):
+                widget.unhighlight()
+        # Подсветка выбранной (ищем по ID в данных)
+        for widget in self.products_container.winfo_children():
+            if isinstance(widget, ProductCard) and widget.product_data['id'] == product_id:
+                # Определяем цвет темы
+                theme_color = "#359A85" if self.current_theme == "light" else "#fcb2b2"
+                widget.highlight(theme_color)
+                break
+    
+    def show_context_menu(self, event, product):
+        """Отображение контекстного меню (правый клик)."""
+        menu = ctk.CTkMenu(master=self, tearoff=False)
+        menu.add_command(label="Обновить", command=self.load_products)
+        menu.add_command(label="Добавить в корзину", command=lambda: self.add_to_cart(product))
+        menu.post(event.x_root, event.y_root)
+    
+    def add_to_cart(self, product_data):
+        """Добавление товара в корзину."""
+        product_id = product_data['id']
+        final_price = product_data['price'] * (1 - product_data['discount'] / 100)
+        
+        # Проверка, есть ли уже такой товар в корзине
+        for i, (pid, qty, price) in enumerate(self.cart):
+            if pid == product_id:
+                self.cart[i] = (pid, qty + 1, price)
+                break
+        else:
+            self.cart.append((product_id, 1, final_price))
+        
+        # Обновление счетчика на кнопке корзины
+        total_items = sum(qty for _, qty, _ in self.cart)
+        self.cart_btn.configure(text=f"🛒 Корзина ({total_items})")
+        
+        messagebox.showinfo("Корзина", f"Товар '{product_data['name']}' добавлен в корзину")
+    
+    def open_cart_window(self):
+        """Открытие окна корзины."""
+        if not self.cart:
+            messagebox.showinfo("Корзина", "Корзина пуста")
+            return
+        open_cart(self, self.user_id, self.cart, self.clear_cart_callback)
+    
+    def clear_cart_callback(self):
+        """Callback для очистки корзины после оформления заказа."""
+        self.cart = []
+        total_items = 0
+        self.cart_btn.configure(text=f"🛒 Корзина ({total_items})")
+    
+    def toggle_theme(self):
+        """Переключение цветовой темы приложения."""
+        if self.current_theme == "light":
+            ctk.set_appearance_mode("Dark")
+            self.current_theme = "dark"
+            self.theme_btn.configure(text="☀️")
+        else:
+            ctk.set_appearance_mode("Light")
+            self.current_theme = "light"
+            self.theme_btn.configure(text="🌙")
+    
+    def on_resize(self, event):
+        """Адаптивная подстройка размера карточек (простейшая)."""
+        width = event.width
+        if width < 1000:
+            # Можно изменить кол-во колонок, но для простоты пропустим
+            pass
+
+def show_login():
+    """Окно авторизации и регистрации."""
+    login_window = ctk.CTk()
+    login_window.title("Авторизация — ТехноМаркет")
+    login_window.geometry("400x500")
+    login_window.resizable(False, False)
+    
+    # Центрирование окна
+    login_window.update_idletasks()
+    x = (login_window.winfo_screenwidth() // 2) - (400 // 2)
+    y = (login_window.winfo_screenheight() // 2) - (500 // 2)
+    login_window.geometry(f"400x500+{x}+{y}")
+    
+    # Фрейм для формы
+    frame = ctk.CTkFrame(login_window, corner_radius=20)
+    frame.pack(expand=True, fill="both", padx=30, pady=30)
+    
+    ctk.CTkLabel(frame, text="Добро пожаловать", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=(30, 20))
+    
+    # Поля ввода
+    username_entry = ctk.CTkEntry(frame, placeholder_text="Логин", width=250)
+    username_entry.pack(pady=10)
+    
+    password_entry = ctk.CTkEntry(frame, placeholder_text="Пароль", show="*", width=250)
+    password_entry.pack(pady=10)
+    
+    status_label = ctk.CTkLabel(frame, text="", font=ctk.CTkFont(size=12))
+    status_label.pack(pady=5)
+    
+    def do_login():
+        username = username_entry.get()
+        password = password_entry.get()
+        success, msg, user_id = authenticate_user(username, password)
+        if success:
+            status_label.configure(text=msg, text_color="green")
+            login_window.destroy()
+            app = MainApp(user_id)
+            app.mainloop()
+        else:
+            status_label.configure(text=msg, text_color="red")
+    
+    def do_register():
+        username = username_entry.get()
+        password = password_entry.get()
+        if not username or not password:
+            status_label.configure(text="Заполните все поля", text_color="red")
+            return
+        if register_user(username, password):
+            status_label.configure(text="Регистрация успешна! Теперь войдите.", text_color="green")
+            username_entry.delete(0, 'end')
+            password_entry.delete(0, 'end')
+        else:
+            status_label.configure(text="Пользователь уже существует", text_color="red")
+    
+    ctk.CTkButton(frame, text="Войти", command=do_login, width=200).pack(pady=10)
+    ctk.CTkButton(frame, text="Зарегистрироваться", command=do_register, width=200, fg_color="gray").pack(pady=5)
+    
+    login_window.mainloop()
+
+if __name__ == "__main__":
+    # Инициализация БД при старте
+    init_db()
+    show_login()
+
+
+import customtkinter as ctk
+from tkinter import messagebox
+from database import get_product_by_id, save_order
+
+def open_cart(parent, user_id, cart_items, clear_cart_callback):
+    """Окно корзины с таблицей товаров, итоговой суммой и оформлением заказа."""
+    cart_window = ctk.CTkToplevel(parent)
+    cart_window.title("Корзина — ТехноМаркет")
+    cart_window.geometry("800x500")
+    cart_window.grab_set()  # Модальное окно
+    
+    # Шапка
+    header = ctk.CTkFrame(cart_window, height=50, corner_radius=0)
+    header.pack(fill="x")
+    ctk.CTkLabel(header, text="Корзина", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=10)
+    
+    # Фрейм для таблицы (скроллируемый)
+    table_frame = ctk.CTkScrollableFrame(cart_window, corner_radius=10)
+    table_frame.pack(fill="both", expand=True, padx=20, pady=10)
+    
+    # Заголовки таблицы
+    headers = ["Товар", "Описание", "Цена", "Кол-во", "Сумма", ""]
+    for i, header in enumerate(headers):
+        lbl = ctk.CTkLabel(table_frame, text=header, font=ctk.CTkFont(weight="bold"), width=120)
+        lbl.grid(row=0, column=i, padx=5, pady=5, sticky="w")
+    
+    rows = []
+    total_sum = 0
+    
+    # Заполнение таблицы
+    for idx, (product_id, quantity, price) in enumerate(cart_items):
+        product = get_product_by_id(product_id)
+        if not product:
+            continue
+        name = product['name']
+        desc = product['description'][:30]
+        item_sum = price * quantity
+        total_sum += item_sum
+        
+        # Название
+        ctk.CTkLabel(table_frame, text=name).grid(row=idx+1, column=0, padx=5, pady=2, sticky="w")
+        # Описание
+        ctk.CTkLabel(table_frame, text=desc).grid(row=idx+1, column=1, padx=5, pady=2, sticky="w")
+        # Цена за единицу
+        ctk.CTkLabel(table_frame, text=f"{price:.2f} ₽").grid(row=idx+1, column=2, padx=5, pady=2, sticky="e")
+        # Количество (можно редактировать, но для простоты — метка)
+        ctk.CTkLabel(table_frame, text=str(quantity)).grid(row=idx+1, column=3, padx=5, pady=2, sticky="e")
+        # Сумма
+        ctk.CTkLabel(table_frame, text=f"{item_sum:.2f} ₽").grid(row=idx+1, column=4, padx=5, pady=2, sticky="e")
+        
+        # Кнопка удаления
+        def make_delete_func(idx_to_del):
+            return lambda: delete_item(idx_to_del)
+        
+        del_btn = ctk.CTkButton(table_frame, text="Удалить", width=60, height=25, 
+                               command=make_delete_func(idx))
+        del_btn.grid(row=idx+1, column=5, padx=5, pady=2)
+        rows.append(del_btn)
+    
+    def delete_item(row_index):
+        """Удаление товара из корзины и обновление окна."""
+        del cart_items[row_index]
+        cart_window.destroy()
+        open_cart(parent, user_id, cart_items, clear_cart_callback)
+    
+    # Нижняя панель с суммой и кнопками
+    bottom_frame = ctk.CTkFrame(cart_window, height=60)
+    bottom_frame.pack(fill="x", side="bottom", padx=20, pady=10)
+    
+    total_label = ctk.CTkLabel(bottom_frame, text=f"Общая сумма заказов: {total_sum:.2f} ₽", 
+                               font=ctk.CTkFont(size=16, weight="bold"))
+    total_label.pack(side="left", padx=10)
+    
+    def clear_cart():
+        if messagebox.askyesno("Очистка", "Вы уверены, что хотите очистить корзину?"):
+            cart_items.clear()
+            cart_window.destroy()
+            clear_cart_callback()
+    
+    def checkout():
+        if messagebox.askyesno("Оформление", "Подтвердить заказ?"):
+            # Сохранение заказа в БД
+            if save_order(user_id, cart_items):
+                messagebox.showinfo("Успех", "Заказ оформлен! Спасибо за покупку!")
+                cart_items.clear()
+                cart_window.destroy()
+                clear_cart_callback()
+            else:
+                messagebox.showerror("Ошибка", "Не удалось сохранить заказ")
+    
+    clear_btn = ctk.CTkButton(bottom_frame, text="Очистить корзину", command=clear_cart, fg_color="gray")
+    clear_btn.pack(side="right", padx=10)
+    
+    order_btn = ctk.CTkButton(bottom_frame, text="Оформить заказ", command=checkout, fg_color="#359A85")
+    order_btn.pack(side="right", padx=10)
+
+
+
+
+
+git clone https://github.com/avalon60/ctk_theme_builder.git
+
+
+pip install CTkMenuBarPlus
+
+from CTkMenuBarPlus import ContextMenu
+context_menu = ContextMenu(widget)
+context_menu.add_option("Обновить", refresh_function)
+context_menu.add_option("Добавить в корзину", add_to_cart_function)
+
+
+pip install Pillow
+
+scrollable_frame = ctk.CTkScrollableFrame(master, orientation="vertical")
+scrollable_frame.pack(fill="both", expand=True)
+    except Exception as e:
+        print(f"Ошибка сохранения заказа: {e}")
+        return False
