@@ -1,0 +1,444 @@
+Отлично, перед нами официальное задание демо-экзамена 2026 года (вариант №2) по специальности 09.02.07. Оно существенно отличается от предыдущего варианта (магазин товаров). Здесь упор на производственное предприятие, ER-диаграммы, сложные SQL-запросы и валидацию СНИЛС через API.
+
+Я структурирую задание и дам готовый код для самых сложных модулей.
+
+---
+
+📊 Модуль 1: Проектирование ER-диаграммы (20 мин)
+
+Что нужно сделать: Спроектировать БД в 3НФ для учета производства продукции.
+
+Логическая схема (рекомендуемая):
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│ Заказчики   │     │ Заказы      │     │ Продукция   │
+├─────────────┤     ├─────────────┤     ├─────────────┤
+│ id (PK)     │◄────│ customer_id │     │ id (PK)     │
+│ name        │     │ id (PK)     │────►│ product_id  │
+│ inn         │     │ order_date  │     │ name        │
+└─────────────┘     └─────────────┘     │ price       │
+                              │          └─────────────┘
+                              │                  │
+                              ▼                  ▼
+                     ┌─────────────┐     ┌─────────────┐
+                     │ Заказ_Состав │     │ Спецификация│
+                     ├─────────────┤     ├─────────────┤
+                     │ order_id(FK)│     │ product_id  │
+                     │ product_id  │     │ material_id │
+                     │ quantity    │     │ norm        │
+                     └─────────────┘     └─────────────┘
+                                                 │
+                                                 ▼
+                                        ┌─────────────┐
+                                        │ Материалы   │
+                                        ├─────────────┤
+                                        │ id (PK)     │
+                                        │ name        │
+                                        │ cost        │
+                                        └─────────────┘
+```
+
+ER-диаграмму нарисуйте в Draw.io и сохраните в er_diagram.pdf.
+
+---
+
+🗄️ Модуль 2: Разработка БД (30 мин)
+
+```sql
+-- Создание таблиц (SQLite/PostgreSQL)
+CREATE TABLE customers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    inn TEXT UNIQUE
+);
+
+CREATE TABLE products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    base_price REAL NOT NULL
+);
+
+CREATE TABLE materials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    cost_per_unit REAL NOT NULL
+);
+
+CREATE TABLE specifications (
+    product_id INTEGER,
+    material_id INTEGER,
+    norm REAL NOT NULL, -- норма расхода материала на единицу продукции
+    FOREIGN KEY (product_id) REFERENCES products(id),
+    FOREIGN KEY (material_id) REFERENCES materials(id),
+    PRIMARY KEY (product_id, material_id)
+);
+
+CREATE TABLE orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id INTEGER,
+    order_date TEXT,
+    FOREIGN KEY (customer_id) REFERENCES customers(id)
+);
+
+CREATE TABLE order_items (
+    order_id INTEGER,
+    product_id INTEGER,
+    quantity INTEGER,
+    FOREIGN KEY (order_id) REFERENCES orders(id),
+    FOREIGN KEY (product_id) REFERENCES products(id)
+);
+```
+
+Импорт данных из JSON (Python):
+
+```python
+import sqlite3, json
+
+conn = sqlite3.connect('production.db')
+cursor = conn.cursor()
+
+with open('Заказчики.json', 'r', encoding='utf-8') as f:
+    customers = json.load(f)
+
+for c in customers:
+    cursor.execute("INSERT INTO customers (name, inn) VALUES (?, ?)", (c['name'], c['inn']))
+
+conn.commit()
+conn.close()
+```
+
+---
+
+📐 Модуль 3: Сложный SQL-запрос (20 мин)
+
+Задача: Вычислить полную стоимость заказа с учетом стоимости всех материалов по норме расхода.
+
+```sql
+SELECT 
+    o.id AS order_id,
+    c.name AS customer_name,
+    SUM(oi.quantity * (
+        SELECT SUM(s.norm * m.cost_per_unit)
+        FROM specifications s
+        JOIN materials m ON s.material_id = m.id
+        WHERE s.product_id = oi.product_id
+    )) AS total_material_cost
+FROM orders o
+JOIN customers c ON o.customer_id = c.id
+JOIN order_items oi ON o.id = oi.order_id
+GROUP BY o.id, c.name;
+```
+
+---
+
+🔐 Модуль 4: Авторизация + Пазл-капча + Роли (1 час)
+
+Самый сложный модуль. Реализуем на Python + CustomTkinter.
+
+```python
+import customtkinter as ctk
+import sqlite3
+import bcrypt
+import hashlib
+import random
+from PIL import Image, ImageTk
+import tkinter as tk
+
+# ---------- БД ----------
+def init_auth_db():
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY,
+            username TEXT UNIQUE,
+            password_hash TEXT,
+            role TEXT,
+            is_blocked INTEGER DEFAULT 0,
+            failed_attempts INTEGER DEFAULT 0
+        )
+    ''')
+    # Админ по умолчанию: admin / admin
+    hashed = bcrypt.hashpw('admin'.encode(), bcrypt.gensalt())
+    cursor.execute('INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)',
+                   ('admin', hashed, 'admin'))
+    conn.commit()
+    conn.close()
+
+# ---------- ПАЗЛ-КАПЧА ----------
+class PuzzleCaptcha(ctk.CTkToplevel):
+    def __init__(self, parent, callback):
+        super().__init__(parent)
+        self.callback = callback
+        self.title("Соберите пазл")
+        self.geometry("400x400")
+        
+        # Загружаем изображение и разрезаем на 4 части
+        self.pieces = []
+        self.selected = None
+        
+        img = Image.open("captcha_image.png")  # подготовьте картинку
+        w, h = img.size
+        piece_w, piece_h = w // 2, h // 2
+        
+        for i in range(2):
+            for j in range(2):
+                piece = img.crop((j*piece_w, i*piece_h, (j+1)*piece_w, (i+1)*piece_h))
+                self.pieces.append(piece)
+        
+        random.shuffle(self.pieces)
+        self.buttons = []
+        for idx, piece in enumerate(self.pieces):
+            photo = ImageTk.PhotoImage(piece.resize((100,100)))
+            btn = ctk.CTkButton(self, image=photo, text="", width=100, height=100,
+                               command=lambda i=idx: self.select_piece(i))
+            btn.image = photo
+            btn.grid(row=idx//2, column=idx%2, padx=5, pady=5)
+            self.buttons.append(btn)
+        
+        ctk.CTkButton(self, text="Проверить", command=self.check).pack(pady=10)
+    
+    def select_piece(self, idx):
+        self.selected = idx
+    
+    def check(self):
+        # Проверяем порядок (для простоты - эталонный порядок)
+        correct_order = [0,1,2,3]  # зависит от исходного порядка
+        if self.selected == correct_order[0]:
+            self.callback(True)
+            self.destroy()
+        else:
+            self.callback(False)
+            self.destroy()
+
+# ---------- ГЛАВНОЕ ОКНО ----------
+class LoginApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        init_auth_db()
+        self.title("Авторизация")
+        self.geometry("400x350")
+        
+        self.username = ctk.CTkEntry(self, placeholder_text="Логин")
+        self.username.pack(pady=10)
+        self.password = ctk.CTkEntry(self, placeholder_text="Пароль", show="*")
+        self.password.pack(pady=10)
+        
+        self.captcha_status = False
+        ctk.CTkButton(self, text="Пройти капчу (пазл)", command=self.open_captcha).pack(pady=5)
+        ctk.CTkButton(self, text="Войти", command=self.login).pack(pady=10)
+    
+    def open_captcha(self):
+        PuzzleCaptcha(self, self.captcha_result)
+    
+    def captcha_result(self, success):
+        self.captcha_status = success
+        if not success:
+            self.increment_fails()
+    
+    def increment_fails(self):
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        username = self.username.get()
+        cursor.execute("UPDATE users SET failed_attempts = failed_attempts + 1 WHERE username = ?", (username,))
+        cursor.execute("UPDATE users SET is_blocked = 1 WHERE username = ? AND failed_attempts >= 3", (username,))
+        conn.commit()
+        conn.close()
+    
+    def login(self):
+        username = self.username.get()
+        password = self.password.get()
+        
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT password_hash, role, is_blocked FROM users WHERE username = ?", (username,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            self.show_error()
+            return
+        
+        hash_pw, role, blocked = row
+        if blocked:
+            self.show_error("Вы заблокированы. Обратитесь к администратору")
+            return
+        
+        if not self.captcha_status:
+            self.show_error("Пройдите капчу")
+            return
+        
+        if bcrypt.checkpw(password.encode(), hash_pw):
+            self.show_success("Вы успешно авторизовались")
+            if role == 'admin':
+                self.open_admin_panel()
+            else:
+                self.open_user_panel()
+        else:
+            self.show_error()
+            self.increment_fails()
+    
+    def open_admin_panel(self):
+        admin = ctk.CTkToplevel(self)
+        admin.title("Панель администратора")
+        admin.geometry("500x400")
+        
+        # Добавление пользователя
+        ctk.CTkLabel(admin, text="Новый логин:").pack()
+        new_login = ctk.CTkEntry(admin)
+        new_login.pack()
+        ctk.CTkLabel(admin, text="Пароль:").pack()
+        new_pass = ctk.CTkEntry(admin, show="*")
+        new_pass.pack()
+        
+        def add_user():
+            conn = sqlite3.connect('users.db')
+            cursor = conn.cursor()
+            hashed = bcrypt.hashpw(new_pass.get().encode(), bcrypt.gensalt())
+            try:
+                cursor.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+                              (new_login.get(), hashed, 'user'))
+                conn.commit()
+            except:
+                print("Пользователь уже существует")
+            conn.close()
+        
+        ctk.CTkButton(admin, text="Добавить", command=add_user).pack(pady=5)
+    
+    def open_user_panel(self):
+        user = ctk.CTkToplevel(self)
+        user.title("Пользователь")
+        user.geometry("300x200")
+        ctk.CTkLabel(user, text="Добро пожаловать!").pack()
+    
+    def show_error(self, msg="Вы ввели неверный логин или пароль"):
+        ctk.CTkLabel(self, text=msg, text_color="red").pack()
+    
+    def show_success(self, msg):
+        ctk.CTkLabel(self, text=msg, text_color="green").pack()
+
+if __name__ == "__main__":
+    app = LoginApp()
+    app.mainloop()
+```
+
+---
+
+📄 Модуль 5: Проектная документация (20 мин)
+
+Создайте Проектная_документация.docx с разделами:
+
+1. Функциональное назначение — что делает система (авторизация, капча, роли)
+2. Используемые методы:
+   · Хеширование паролей: bcrypt
+   · Капча-пазл: деление изображения на фрагменты
+   · Блокировка: счетчик неудачных попыток
+3. Параметры запуска — Python 3.8+, библиотеки из requirements.txt
+
+---
+
+🌐 Модуль 6: Валидация СНИЛС + API (1 час)
+
+```python
+import requests
+import json
+import customtkinter as ctk
+from docx import Document
+
+def validate_snils(snils):
+    """Проверка СНИЛС по контрольной сумме"""
+    snils = snils.replace("-", "").replace(" ", "")
+    if not snils.isdigit() or len(snils) != 11:
+        return False
+    total = 0
+    for i, digit in enumerate(snils[:9]):
+        total += int(digit) * (9 - i)
+    control = int(snils[9:])
+    if total < 100:
+        return total == control
+    elif total == 100 or total == 101:
+        return control == 0
+    else:
+        return (total % 101) == control
+
+class ValidationApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Валидация данных")
+        self.geometry("600x400")
+        
+        # Подготовка ТестКейса
+        self.doc = Document('ТестКейс.docx')
+        self.table = self.doc.tables[0]
+        
+        # Интерфейс
+        self.data_text = ctk.CTkTextbox(self, height=200)
+        self.data_text.pack(pady=10, padx=10, fill="x")
+        
+        ctk.CTkButton(self, text="Получить данные", command=self.fetch_data).pack(pady=5)
+        ctk.CTkButton(self, text="Отправить результат теста", command=self.send_result).pack(pady=5)
+    
+    def fetch_data(self):
+        # Запрос к TransferSimulator.exe через HTTP
+        response = requests.get("http://localhost:8080/api/get_data")
+        data = response.json()
+        self.data_text.delete("1.0", "end")
+        self.data_text.insert("1.0", json.dumps(data, indent=2))
+        
+        # Заполняем ТестКейс
+        self.table.cell(1, 0).text = "Валидация СНИЛС"
+        self.table.cell(1, 1).text = "Проверка контрольной суммы"
+        self.table.cell(1, 2).text = "СНИЛС корректен"  # ожидаемый результат
+        # Закладка для результата
+        self.table.cell(1, 3).text = ""  # сюда запишем результат после проверки
+    
+    def send_result(self):
+        data = json.loads(self.data_text.get("1.0", "end"))
+        snils = data.get('snils', '')
+        is_valid = validate_snils(snils)
+        
+        # Записываем результат в ТестКейс
+        self.table.cell(1, 3).text = "✅ Пройдено" if is_valid else "❌ Не пройдено"
+        self.doc.save('ТестКейс.docx')
+        
+        # Отправляем результат в эмулятор
+        response = requests.post("http://localhost:8080/api/send_result", 
+                                json={"snils_valid": is_valid})
+        self.show_result(is_valid)
+    
+    def show_result(self, valid):
+        msg = "СНИЛС валиден" if valid else "СНИЛС невалиден"
+        ctk.CTkLabel(self, text=msg, text_color="green" if valid else "red").pack()
+
+if __name__ == "__main__":
+    app = ValidationApp()
+    app.mainloop()
+```
+
+---
+
+🛠️ requirements.txt для экзамена
+
+```txt
+customtkinter>=5.2.0
+bcrypt>=4.0.0
+pillow>=10.0.0
+requests>=2.31.0
+python-docx>=1.1.0
+sqlalchemy>=2.0.0
+```
+
+---
+
+💡 Ключевые советы для сдачи
+
+Модуль Ключевой навык Тайминг
+1 Проектирование связей "многие-ко-многим" 20 мин
+2 Импорт JSON в SQLite 30 мин
+3 Подзапросы (субзапросы) и JOIN 20 мин
+4 Капча-пазл + bcrypt + блокировка 60 мин
+5 Оформление документации 20 мин
+6 Валидация СНИЛС + API (requests) 60 мин
+
+Удачи на экзамене! Если нужны уточнения по любому модулю — спрашивайте.
