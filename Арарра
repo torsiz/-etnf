@@ -1,0 +1,862 @@
+Отлично, перед нами задание ДЭ 2026 года, которое заметно отличается от предыдущего обсуждения. Теперь это полноценный экзамен из 6 модулей с жестким регламентом (всего 3 часа 30 минут).
+
+Вот детальный разбор каждого модуля, требования и рекомендации по выполнению на Python.
+
+---
+
+📋 Общая информация
+
+Параметр Значение
+Специальность 09.02.07 Информационные системы и программирование
+Квалификация Специалист по информационным системам
+Уровень Профильный
+Шифр варианта В2_КОД 09.02.07-5-2026-ПУ
+Продолжительность 3 часа 30 минут (210 минут)
+
+Важное предупреждение: Задание очень объемное для 3.5 часов. На экзамене нужно четко распределять время и не зацикливаться на одной задаче.
+
+---
+
+🗂️ Модуль 1: Проектирование ER-диаграммы
+
+⏱️ 20 минут
+
+Что нужно сделать
+
+Спроектировать ER-диаграмму для предприятия, которое:
+
+· Производит продукцию по спецификациям
+· Реализует продукцию заказчикам
+· Цена продукции зависит от стоимости материалов
+
+Требования
+
+· 3-я нормальная форма (3НФ)
+· Ссылочная целостность
+· Осмысленная схема именования
+· Первичные и внешние ключи
+· Типы данных можно не указывать
+
+Результат
+
+· Файл в формате .pdf с таблицами, связями, атрибутами и ключами
+
+🛠️ Инструменты для выполнения
+
+Инструмент Как использовать
+Draw.io (бесплатно) Сохранить как PDF через File → Export as → PDF
+PlantUML Текстовое описание, экспорт в PDF
+Lucidchart Онлайн, есть бесплатный тариф
+
+📊 Рекомендуемая структура таблиц (минимум)
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Заказчики  │     │   Заказы    │     │Товары/Продукция│
+├─────────────┤     ├─────────────┤     ├─────────────┤
+│ PK id       │──┐  │ PK id       │     │ PK id       │
+│ ФИО         │  │  │ FK заказчик_id│──┐ │ Название    │
+│ телефон     │  └─►│ FK товар_id │  │ │ Цена        │
+│ email       │     │ количество  │  │ │ FK спецификация_id│
+└─────────────┘     │ дата_заказа │  │ └─────────────┘
+                    └─────────────┘  │         │
+                                     │         ▼
+                    ┌─────────────────┐  ┌─────────────┐
+                    │  Спецификации   │  │  Материалы  │
+                    ├─────────────────┤  ├─────────────┤
+                    │ PK id           │  │ PK id       │
+                    │ FK товар_id     │◄─┤ Название    │
+                    │ FK материал_id  │  │ Стоимость   │
+                    │ норма_расхода   │  └─────────────┘
+                    └─────────────────┘
+```
+
+Совет: Не тратьте больше 20 минут. Сделайте аккуратно, 3-4 таблицы с ключами — этого достаточно.
+
+---
+
+🗄️ Модуль 2: Разработка базы данных
+
+⏱️ 30 минут
+
+Что нужно сделать
+
+1. Создать БД на основе ER-диаграммы из Модуля 1
+2. Создать таблицы с атрибутами и ограничениями
+3. Импортировать данные из файла "Заказчики.json"
+
+🐍 Код для создания БД (SQLite)
+
+```python
+import sqlite3
+import json
+
+def create_database():
+    conn = sqlite3.connect("enterprise.db")
+    cursor = conn.cursor()
+    
+    # Таблица заказчиков (импорт из JSON)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Заказчики (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            фио TEXT NOT NULL,
+            телефон TEXT,
+            email TEXT UNIQUE
+        )
+    ''')
+    
+    # Таблица материалов
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Материалы (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            название TEXT NOT NULL,
+            стоимость REAL NOT NULL CHECK(стоимость >= 0)
+        )
+    ''')
+    
+    # Таблица продукции
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Продукция (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            название TEXT NOT NULL,
+            цена REAL NOT NULL
+        )
+    ''')
+    
+    # Таблица спецификаций (связь продукция-материалы)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Спецификации (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            продукция_id INTEGER NOT NULL,
+            материал_id INTEGER NOT NULL,
+            норма_расхода REAL NOT NULL,
+            FOREIGN KEY (продукция_id) REFERENCES Продукция(id) ON DELETE CASCADE,
+            FOREIGN KEY (материал_id) REFERENCES Материалы(id) ON DELETE CASCADE,
+            UNIQUE(продукция_id, материал_id)
+        )
+    ''')
+    
+    # Таблица заказов
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Заказы (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            заказчик_id INTEGER NOT NULL,
+            продукция_id INTEGER NOT NULL,
+            количество INTEGER NOT NULL CHECK(количество > 0),
+            дата_заказа TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (заказчик_id) REFERENCES Заказчики(id),
+            FOREIGN KEY (продукция_id) REFERENCES Продукция(id)
+        )
+    ''')
+    
+    # Импорт заказчиков из JSON
+    with open("Заказчики.json", "r", encoding="utf-8") as f:
+        customers = json.load(f)
+    
+    for customer in customers:
+        cursor.execute('''
+            INSERT OR IGNORE INTO Заказчики (фио, телефон, email)
+            VALUES (?, ?, ?)
+        ''', (customer.get('фио'), customer.get('телефон'), customer.get('email')))
+    
+    conn.commit()
+    conn.close()
+    print("✅ База данных создана и заполнена")
+
+if __name__ == "__main__":
+    create_database()
+```
+
+---
+
+📊 Модуль 3: Создание запроса
+
+⏱️ 20 минут
+
+Что нужно сделать
+
+Создать запрос для вычисления полной стоимости заказа с учетом:
+
+1. Количества продукции в заказе
+2. Стоимости всех материалов (с учетом нормы расхода)
+
+📝 SQL-запрос
+
+```sql
+-- Полная стоимость заказа с учетом материалов
+SELECT 
+    З.id AS номер_заказа,
+    Зак.фио AS заказчик,
+    П.название AS продукция,
+    З.количество AS количество,
+    SUM(М.стоимость * С.норма_расхода) AS стоимость_материалов_на_ед,
+    (SUM(М.стоимость * С.норма_расхода) * З.количество) AS полная_стоимость_заказа
+FROM Заказы З
+JOIN Заказчики Зак ON З.заказчик_id = Зак.id
+JOIN Продукция П ON З.продукция_id = П.id
+JOIN Спецификации С ON П.id = С.продукция_id
+JOIN Материалы М ON С.материал_id = М.id
+GROUP BY З.id, Зак.фио, П.название, З.количество;
+
+-- Альтернативный вариант: полная стоимость по каждому заказу
+SELECT 
+    З.id AS заказ,
+    SUM(М.стоимость * С.норма_расхода * З.количество) AS итоговая_стоимость
+FROM Заказы З
+JOIN Спецификации С ON З.продукция_id = С.продукция_id
+JOIN Материалы М ON С.материал_id = М.id
+GROUP BY З.id;
+```
+
+---
+
+🔐 Модуль 4: Разработка ИС с авторизацией и капчей-пазлом
+
+⏱️ 1 час
+
+Что нужно сделать
+
+1. Создать таблицу Пользователи (с ролями и блокировкой)
+2. Форма авторизации с логином, паролем, капчей-пазлом
+3. Блокировка после 3 неудачных попыток
+4. Админ-панель: добавление/изменение/разблокировка пользователей
+
+🐍 Полный код (Python + CustomTkinter)
+
+```python
+import sqlite3
+import bcrypt
+import customtkinter as ctk
+from tkinter import messagebox
+from PIL import Image, ImageTk
+import random
+import json
+
+ctk.set_appearance_mode("Light")
+ctk.set_default_color_theme("green")
+
+# ========== БАЗА ДАННЫХ ==========
+def init_users_db():
+    conn = sqlite3.connect("enterprise.db")
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Пользователи (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            логин TEXT UNIQUE NOT NULL,
+            пароль_hash TEXT NOT NULL,
+            роль TEXT DEFAULT 'Пользователь',
+            заблокирован BOOLEAN DEFAULT 0,
+            попытки INTEGER DEFAULT 0
+        )
+    ''')
+    
+    # Создание админа по умолчанию
+    admin_hash = bcrypt.hashpw("admin123".encode('utf-8'), bcrypt.gensalt())
+    try:
+        cursor.execute("INSERT INTO Пользователи (логин, пароль_hash, роль) VALUES (?, ?, 'Администратор')",
+                      ("admin", admin_hash))
+    except sqlite3.IntegrityError:
+        pass
+    
+    conn.commit()
+    conn.close()
+    print("✅ Таблица пользователей готова")
+
+# Функции работы с пользователями
+def register_user(login, password, role="Пользователь"):
+    try:
+        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        conn = sqlite3.connect("enterprise.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO Пользователи (логин, пароль_hash, роль) VALUES (?, ?, ?)",
+                      (login, hashed, role))
+        conn.commit()
+        conn.close()
+        return True, "Пользователь добавлен"
+    except sqlite3.IntegrityError:
+        return False, "Логин уже существует"
+
+def authenticate_user(login, password):
+    conn = sqlite3.connect("enterprise.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, пароль_hash, роль, заблокирован, попытки FROM Пользователи WHERE логин = ?", (login,))
+    user = cursor.fetchone()
+    
+    if not user:
+        conn.close()
+        return False, "Пользователь не найден", None, None
+    
+    user_id, hashed, role, blocked, attempts = user
+    
+    if blocked:
+        conn.close()
+        return False, "Вы заблокированы. Обратитесь к администратору", None, None
+    
+    if bcrypt.checkpw(password.encode('utf-8'), hashed):
+        cursor.execute("UPDATE Пользователи SET попытки = 0 WHERE id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+        return True, "Вы успешно авторизовались", role, user_id
+    else:
+        attempts += 1
+        if attempts >= 3:
+            cursor.execute("UPDATE Пользователи SET заблокирован = 1, попытки = ? WHERE id = ?", (attempts, user_id))
+            conn.commit()
+            conn.close()
+            return False, "Превышено количество попыток. Аккаунт заблокирован", None, None
+        else:
+            cursor.execute("UPDATE Пользователи SET попытки = ? WHERE id = ?", (attempts, user_id))
+            conn.commit()
+            conn.close()
+            return False, f"Неверный пароль. Осталось попыток: {3 - attempts}", None, None
+
+def get_all_users():
+    conn = sqlite3.connect("enterprise.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, логин, роль, заблокирован FROM Пользователи")
+    users = cursor.fetchall()
+    conn.close()
+    return users
+
+def unblock_user(user_id):
+    conn = sqlite3.connect("enterprise.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE Пользователи SET заблокирован = 0, попытки = 0 WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def update_user_role(user_id, new_role):
+    conn = sqlite3.connect("enterprise.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE Пользователи SET роль = ? WHERE id = ?", (new_role, user_id))
+    conn.commit()
+    conn.close()
+
+# ========== КАПЧА-ПАЗЛ ==========
+class PuzzleCaptcha(ctk.CTkFrame):
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+        
+        self.pieces = []  # Хранение фрагментов
+        self.correct_order = []  # Правильный порядок
+        self.current_order = []  # Текущий порядок
+        
+        self.create_puzzle()
+    
+    def create_puzzle(self):
+        # Загрузка изображения и разбивка на 4 фрагмента (2x2)
+        try:
+            img = Image.open("puzzle_image.png").resize((200, 200))
+        except:
+            # Создаем тестовое изображение, если файла нет
+            img = Image.new('RGB', (200, 200), color='lightblue')
+        
+        piece_size = 100
+        self.correct_order = []
+        
+        for row in range(2):
+            for col in range(2):
+                piece = img.crop((col*piece_size, row*piece_size, 
+                                 (col+1)*piece_size, (row+1)*piece_size))
+                self.correct_order.append(piece)
+        
+        # Перемешиваем фрагменты
+        self.current_order = self.correct_order.copy()
+        random.shuffle(self.current_order)
+        
+        self.display_puzzle()
+    
+    def display_puzzle(self):
+        # Очистка
+        for widget in self.winfo_children():
+            widget.destroy()
+        
+        ctk.CTkLabel(self, text="Соберите пазл:", font=ctk.CTkFont(size=12)).pack(pady=5)
+        
+        # Отображение фрагментов в сетке 2x2
+        for i, piece in enumerate(self.current_order):
+            row = i // 2
+            col = i % 2
+            
+            # Конвертация в CTkImage
+            ctk_img = ctk.CTkImage(light_image=piece, dark_image=piece, size=(90, 90))
+            btn = ctk.CTkButton(self, image=ctk_img, text="", width=90, height=90,
+                               command=lambda idx=i: self.swap_piece(idx))
+            btn.grid(row=row, column=col, padx=5, pady=5)
+    
+    def swap_piece(self, idx):
+        # Обмен с соседним фрагментом (простая логика)
+        if idx < 3:
+            self.current_order[idx], self.current_order[idx + 1] = \
+                self.current_order[idx + 1], self.current_order[idx]
+        else:
+            self.current_order[idx], self.current_order[idx - 1] = \
+                self.current_order[idx - 1], self.current_order[idx]
+        
+        self.display_puzzle()
+    
+    def verify(self):
+        # Проверка правильности сборки
+        for i in range(len(self.correct_order)):
+            if self.current_order[i] != self.correct_order[i]:
+                return False
+        return True
+
+# ========== ОКНО АДМИНИСТРАТОРА ==========
+class AdminPanel(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Администрирование пользователей")
+        self.geometry("600x400")
+        
+        self.create_ui()
+        self.load_users()
+    
+    def create_ui(self):
+        # Список пользователей
+        self.users_listbox = ctk.CTkScrollableFrame(self, width=350)
+        self.users_listbox.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        
+        # Панель действий
+        actions_frame = ctk.CTkFrame(self, width=200)
+        actions_frame.pack(side="right", fill="y", padx=10, pady=10)
+        
+        ctk.CTkLabel(actions_frame, text="Действия", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+        
+        self.add_login = ctk.CTkEntry(actions_frame, placeholder_text="Логин")
+        self.add_login.pack(pady=5)
+        
+        self.add_pass = ctk.CTkEntry(actions_frame, placeholder_text="Пароль", show="*")
+        self.add_pass.pack(pady=5)
+        
+        self.role_var = ctk.StringVar(value="Пользователь")
+        role_menu = ctk.CTkOptionMenu(actions_frame, values=["Пользователь", "Администратор"], 
+                                      variable=self.role_var)
+        role_menu.pack(pady=5)
+        
+        ctk.CTkButton(actions_frame, text="➕ Добавить", command=self.add_user).pack(pady=5)
+        ctk.CTkButton(actions_frame, text="🔓 Разблокировать", command=self.unblock_user).pack(pady=5)
+        ctk.CTkButton(actions_frame, text="🗑️ Удалить", command=self.delete_user, fg_color="red").pack(pady=5)
+    
+    def load_users(self):
+        for widget in self.users_listbox.winfo_children():
+            widget.destroy()
+        
+        users = get_all_users()
+        self.user_buttons = []
+        
+        for user in users:
+            user_id, login, role, blocked = user
+            status = "🔒 Заблокирован" if blocked else "✅ Активен"
+            btn = ctk.CTkButton(self.users_listbox, 
+                               text=f"{login} [{role}] - {status}",
+                               anchor="w", height=35,
+                               command=lambda uid=user_id: self.select_user(uid))
+            btn.pack(fill="x", pady=2)
+            self.user_buttons.append((btn, user_id))
+    
+    def select_user(self, user_id):
+        self.selected_user_id = user_id
+    
+    def add_user(self):
+        login = self.add_login.get()
+        password = self.add_pass.get()
+        
+        if not login or not password:
+            messagebox.showerror("Ошибка", "Заполните все поля")
+            return
+        
+        success, msg = register_user(login, password, self.role_var.get())
+        if success:
+            messagebox.showinfo("Успех", msg)
+            self.load_users()
+            self.add_login.delete(0, 'end')
+            self.add_pass.delete(0, 'end')
+        else:
+            messagebox.showerror("Ошибка", msg)
+    
+    def unblock_user(self):
+        if hasattr(self, 'selected_user_id'):
+            unblock_user(self.selected_user_id)
+            messagebox.showinfo("Успех", "Пользователь разблокирован")
+            self.load_users()
+    
+    def delete_user(self):
+        if hasattr(self, 'selected_user_id'):
+            if messagebox.askyesno("Подтверждение", "Удалить пользователя?"):
+                conn = sqlite3.connect("enterprise.db")
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM Пользователи WHERE id = ?", (self.selected_user_id,))
+                conn.commit()
+                conn.close()
+                self.load_users()
+
+# ========== ГЛАВНОЕ ОКНО ПОСЛЕ ВХОДА ==========
+class MainWindow(ctk.CTk):
+    def __init__(self, user_id, login, role):
+        super().__init__()
+        self.user_id = user_id
+        self.login = login
+        self.role = role
+        
+        self.title(f"Информационная система - {login}")
+        self.geometry("800x500")
+        
+        ctk.CTkLabel(self, text=f"Добро пожаловать, {login}!", 
+                    font=ctk.CTkFont(size=24, weight="bold")).pack(pady=50)
+        
+        if role == "Администратор":
+            ctk.CTkButton(self, text="👥 Управление пользователями", 
+                         command=self.open_admin_panel, height=50, width=300).pack(pady=20)
+    
+    def open_admin_panel(self):
+        AdminPanel(self)
+
+# ========== ОКНО АВТОРИЗАЦИИ ==========
+class LoginWindow(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Авторизация - Информационная система")
+        self.geometry("400x550")
+        self.resizable(False, False)
+        
+        self.failed_attempts = 0
+        
+        self.create_ui()
+    
+    def create_ui(self):
+        # Основной фрейм
+        frame = ctk.CTkFrame(self, corner_radius=20)
+        frame.pack(expand=True, fill="both", padx=30, pady=30)
+        
+        ctk.CTkLabel(frame, text="Вход в систему", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=20)
+        
+        # Поля ввода
+        self.login_entry = ctk.CTkEntry(frame, placeholder_text="Логин", width=250, height=40)
+        self.login_entry.pack(pady=10)
+        
+        self.password_entry = ctk.CTkEntry(frame, placeholder_text="Пароль", show="*", width=250, height=40)
+        self.password_entry.pack(pady=10)
+        
+        # Капча-пазл
+        self.captcha = PuzzleCaptcha(frame)
+        self.captcha.pack(pady=15)
+        
+        # Кнопка входа
+        ctk.CTkButton(frame, text="Войти", command=self.do_login, 
+                     width=200, height=40, fg_color="#359A85").pack(pady=20)
+        
+        # Статус
+        self.status_label = ctk.CTkLabel(frame, text="", font=ctk.CTkFont(size=12))
+        self.status_label.pack()
+    
+    def do_login(self):
+        login = self.login_entry.get()
+        password = self.password_entry.get()
+        
+        # Проверка обязательности полей
+        if not login or not password:
+            self.status_label.configure(text="Логин и пароль обязательны для заполнения", text_color="red")
+            return
+        
+        # Проверка капчи
+        if not self.captcha.verify():
+            self.failed_attempts += 1
+            if self.failed_attempts >= 3:
+                messagebox.showerror("Блокировка", "Вы заблокированы. Обратитесь к администратору")
+                self.destroy()
+                return
+            else:
+                self.status_label.configure(text=f"Пазл собран неверно. Осталось попыток: {3 - self.failed_attempts}", 
+                                          text_color="red")
+                self.captcha.create_puzzle()  # Обновляем пазл
+                return
+        
+        # Аутентификация
+        success, msg, role, user_id = authenticate_user(login, password)
+        
+        if success:
+            messagebox.showinfo("Успех", msg)
+            self.destroy()
+            app = MainWindow(user_id, login, role)
+            app.mainloop()
+        else:
+            self.status_label.configure(text=msg, text_color="red")
+
+# ========== ЗАПУСК ==========
+if __name__ == "__main__":
+    init_users_db()
+    app = LoginWindow()
+    app.mainloop()
+```
+
+---
+
+📄 Модуль 5: Разработка проектной документации
+
+⏱️ 20 минут
+
+Что нужно сделать
+
+Разработать документацию на разработанный функционал: описание назначения, используемые методы с параметрами.
+
+📝 Шаблон документации (Word/PDF)
+
+```markdown
+# Проектная документация
+## Информационная система для предприятия
+
+### 1. Назначение системы
+Система предназначена для автоматизации учета заказов, управления пользователями и валидации данных клиентов.
+
+### 2. Функциональные возможности
+- Авторизация пользователей с проверкой капчи-пазл
+- Разграничение ролей (Администратор/Пользователь)
+- Блокировка после 3 неудачных попыток
+- CRUD операции с пользователями (для администратора)
+
+### 3. Используемые методы и технологии
+
+| Компонент | Технология | Параметры |
+|-----------|------------|-----------|
+| GUI | CustomTkinter | версия 5.2.0, тема "green" |
+| БД | SQLite3 | файл enterprise.db, кодировка UTF-8 |
+| Хеширование | bcrypt | соль 12 раундов |
+| Капча | PIL/Pillow | разбивка 2x2, размер 200x200 |
+| HTTP-запросы | requests | метод GET/POST, JSON |
+
+### 4. Схема базы данных
+[Вставить ER-диаграмму из Модуля 1]
+
+### 5. Инструкция по установке
+1. Установить Python 3.8+
+2. Установить зависимости: pip install -r requirements.txt
+3. Запустить: python main.py
+```
+
+---
+
+🌐 Модуль 6: Интеграция программных модулей (валидация СНИЛС)
+
+⏱️ 1 час
+
+Что нужно сделать
+
+1. Разработать приложение для валидации данных (СНИЛС)
+2. Получать данные через API от TransferSimulator.exe
+3. Заполнить ТестКейс.docx: столбцы "Действие" и "Ожидаемый результат"
+4. Проверить валидацию СНИЛС по 2 критериям
+
+🐍 Код приложения валидации
+
+```python
+import customtkinter as ctk
+import requests
+import json
+from docx import Document
+import re
+
+ctk.set_appearance_mode("Light")
+
+class ValidationApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Валидация данных клиентов")
+        self.geometry("600x500")
+        
+        self.create_ui()
+        self.current_data = None
+    
+    def create_ui(self):
+        # Основной фрейм
+        main_frame = ctk.CTkFrame(self, corner_radius=15)
+        main_frame.pack(expand=True, fill="both", padx=20, pady=20)
+        
+        ctk.CTkLabel(main_frame, text="Валидация СНИЛС", 
+                    font=ctk.CTkFont(size=20, weight="bold")).pack(pady=15)
+        
+        # Кнопка получения данных
+        self.get_btn = ctk.CTkButton(main_frame, text="📥 Получить данные", 
+                                    command=self.get_data, height=45)
+        self.get_btn.pack(pady=10, fill="x")
+        
+        # Отображение данных
+        self.data_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        self.data_frame.pack(fill="both", expand=True, pady=15)
+        
+        self.name_label = ctk.CTkLabel(self.data_frame, text="ФИО: --", font=ctk.CTkFont(size=14))
+        self.name_label.pack(anchor="w", pady=5)
+        
+        self.snils_label = ctk.CTkLabel(self.data_frame, text="СНИЛС: --", font=ctk.CTkFont(size=14))
+        self.snils_label.pack(anchor="w", pady=5)
+        
+        self.result_label = ctk.CTkLabel(self.data_frame, text="Результат: ожидание", 
+                                        font=ctk.CTkFont(size=14))
+        self.result_label.pack(anchor="w", pady=5)
+        
+        # Кнопка отправки результата
+        self.send_btn = ctk.CTkButton(main_frame, text="📤 Отправить результат теста", 
+                                     command=self.validate_and_send, height=45,
+                                     fg_color="#359A85", state="disabled")
+        self.send_btn.pack(pady=10, fill="x")
+    
+    def get_data(self):
+        """Получение данных из эмулятора TransferSimulator.exe"""
+        try:
+            # API эмулятора (порт и эндпоинт из api_info.pdf)
+            response = requests.get("http://localhost:8080/api/get_data", timeout=5)
+            
+            if response.status_code == 200:
+                self.current_data = response.json()
+                self.name_label.configure(text=f"ФИО: {self.current_data.get('fio', 'Н/Д')}")
+                self.snils_label.configure(text=f"СНИЛС: {self.current_data.get('snils', 'Н/Д')}")
+                self.send_btn.configure(state="normal")
+                self.result_label.configure(text="Результат: данные получены, ожидает проверки")
+            else:
+                self.result_label.configure(text=f"Ошибка: статус {response.status_code}", text_color="red")
+        except Exception as e:
+            self.result_label.configure(text=f"Ошибка подключения: {str(e)}", text_color="red")
+    
+    def validate_snils(self, snils: str) -> tuple:
+        """
+        Валидация СНИЛС по двум критериям:
+        1. Формат: 123-456-789 01 или 12345678901
+        2. Контрольная сумма
+        """
+        # Критерий 1: очистка от разделителей
+        clean_snils = re.sub(r'\D', '', snils)
+        
+        if len(clean_snils) != 11:
+            return False, "Неверная длина СНИЛС (должно быть 11 цифр)"
+        
+        if not clean_snils.isdigit():
+            return False, "СНИЛС должен содержать только цифры"
+        
+        # Критерий 2: проверка контрольной суммы
+        numbers = [int(d) for d in clean_snils[:9]]
+        control = int(clean_snils[9:])
+        
+        # Алгоритм расчета контрольной суммы
+        total = 0
+        for i, num in enumerate(numbers):
+            total += num * (9 - i)
+        
+        if total < 100:
+            calculated = total
+        elif total == 100:
+            calculated = 0
+        else:
+            calculated = total % 101
+            if calculated == 100:
+                calculated = 0
+        
+        if calculated != control:
+            return False, f"Неверная контрольная сумма (ожидается {calculated:02d}, получено {control:02d})"
+        
+        return True, "СНИЛС валиден"
+    
+    def validate_and_send(self):
+        """Валидация и отправка результата"""
+        if not self.current_data:
+            self.result_label.configure(text="Сначала получите данные", text_color="orange")
+            return
+        
+        snils = self.current_data.get('snils', '')
+        is_valid, message = self.validate_snils(snils)
+        
+        # Обновление интерфейса
+        if is_valid:
+            self.result_label.configure(text=f"✅ Результат: {message}", text_color="green")
+        else:
+            self.result_label.configure(text=f"❌ Результат: {message}", text_color="red")
+        
+        # Отправка результата в API
+        result_data = {
+            "snils": snils,
+            "is_valid": is_valid,
+            "message": message,
+            "timestamp": __import__('datetime').datetime.now().isoformat()
+        }
+        
+        try:
+            response = requests.post("http://localhost:8080/api/send_result", 
+                                    json=result_data,
+                                    timeout=5)
+            if response.status_code == 200:
+                print("Результат отправлен успешно")
+        except Exception as e:
+            print(f"Ошибка отправки: {e}")
+        
+        # Обновление ТестКейс.docx через python-docx
+        self.update_test_case_doc(snils, is_valid, message)
+    
+    def update_test_case_doc(self, snils, is_valid, message):
+        """Обновление документа ТестКейс.docx с результатом"""
+        try:
+            doc = Document("ТестКейс.docx")
+            
+            # Поиск строки с данным СНИЛС и добавление результата
+            for table in doc.tables:
+                for row in table.rows:
+                    if snils in row.cells[1].text:  # Предполагаем, что СНИЛС во 2-й колонке
+                        row.cells[3].text = "✅ Пройден" if is_valid else f"❌ {message}"
+                        break
+            
+            doc.save("ТестКейс.docx")
+            print("Документ ТестКейс.docx обновлен")
+        except Exception as e:
+            print(f"Ошибка обновления документа: {e}")
+
+# Запуск
+if __name__ == "__main__":
+    app = ValidationApp()
+    app.mainloop()
+```
+
+📝 Заполнение ТестКейс.docx
+
+Создайте документ со следующей структурой:
+
+№ СНИЛС Действие Ожидаемый результат Результат
+1 123-456-789 01 Проверка формата Соответствует формату XXX-XXX-XXX XX закладка
+2 112-233-445 95 Проверка контрольной суммы Контрольная сумма верна закладка
+
+---
+
+⏱️ Рекомендуемое распределение времени
+
+Модуль Время Дедлайн
+Модуль 1 (ER-диаграмма) 20 мин 00:20
+Модуль 2 (БД) 30 мин 00:50
+Модуль 3 (Запрос) 20 мин 01:10
+Модуль 4 (ИС + капча) 60 мин 02:10
+Модуль 5 (Документация) 20 мин 02:30
+Модуль 6 (Валидация) 60 мин 03:30
+
+---
+
+📦 requirements.txt для экзамена
+
+```txt
+customtkinter>=5.2.0
+bcrypt>=4.0.0
+pillow>=10.0.0
+requests>=2.31.0
+python-docx>=1.1.0
+sqlalchemy>=2.0.0
+```
+
+---
+
+⚠️ Ключевые моменты для успешной сдачи
+
+1. Капча-пазл — уникальное требование. Реализуйте его простым способом (разбивка 2x2 с возможностью обмена фрагментов).
+2. СНИЛС валидируется по двум критериям:
+   · Формат (11 цифр, может быть с дефисами и пробелами)
+   · Контрольная сумма (алгоритм выше)
+3. API эмулятора — изучите api_info.pdf, порт и эндпоинты могут отличаться.
+4. ТестКейс.docx — используйте библиотеку python-docx для программной вставки результатов.
+5. Не застревайте — если что-то не работает, переходите к следующему модулю.
+
+Удачи на экзамене! Если нужны уточнения по любому модулю — спрашивайте.
