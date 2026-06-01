@@ -1,0 +1,240 @@
+Как создать скомпилированную программу (.exe) из Python проекта
+
+Для демонстрационного экзамена вам нужно будет представить готовую программу, которую можно запустить на любом компьютере без установки Python. Я расскажу, как это сделать правильно.
+
+---
+
+🛠️ Что вам понадобится
+
+Инструмент Назначение Где скачать
+PyInstaller Упаковка Python в .exe pip install pyinstaller
+Inno Setup (опционально) Создание установщика jrsoftware.org 
+
+---
+
+📁 Подготовка проекта к сборке
+
+Прежде чем собирать .exe, нужно изменить код так, чтобы он корректно работал в скомпилированном виде. Самая частая проблема — пути к файлам (база данных, изображения, конфиги).
+
+Исправление путей в коде
+
+Добавьте эту функцию в ваш проект:
+
+```python
+import sys
+import os
+
+def resource_path(relative_path):
+    """Получает абсолютный путь к ресурсу для работы и в скомпилированном .exe"""
+    if hasattr(sys, '_MEIPASS'):
+        # Запущено из .exe — ресурсы во временной папке
+        return os.path.join(sys._MEIPASS, relative_path)
+    # Обычный запуск из Python
+    return os.path.join(os.path.abspath("."), relative_path)
+
+def get_db_path(db_name="users.db"):
+    """Возвращает путь к БД (рядом с .exe, чтобы сохранять изменения)"""
+    if getattr(sys, 'frozen', False):
+        # Для .exe — БД рядом с исполняемым файлом
+        return os.path.join(os.path.dirname(sys.executable), db_name)
+    else:
+        # Для разработки — рядом со скриптом
+        return os.path.join(os.path.dirname(__file__), db_name)
+```
+
+Как это использовать в коде
+
+До исправления:
+
+```python
+# ❌ Так не работает в .exe
+conn = sqlite3.connect('users.db')
+photo = Image.open('assets/logo.png')
+with open('config.ini', 'r') as f:
+```
+
+После исправления:
+
+```python
+# ✅ Работает везде
+conn = sqlite3.connect(get_db_path('users.db'))
+photo = Image.open(resource_path('assets/logo.png'))
+with open(resource_path('config.ini'), 'r') as f:
+```
+
+---
+
+📦 Пошаговая сборка .exe
+
+Шаг 1: Установка PyInstaller
+
+```bash
+pip install pyinstaller
+```
+
+Шаг 2: Базовая сборка (простой вариант)
+
+```bash
+pyinstaller --onefile --windowed main.py
+```
+
+· --onefile — создаёт один .exe файл
+· --windowed — не показывает консоль (для GUI приложений)
+
+Шаг 3: Сборка с дополнительными файлами
+
+Если у вас есть база данных, изображения или другие файлы:
+
+```bash
+pyinstaller --onefile --windowed `
+    --add-data "users.db;." `
+    --add-data "assets;assets" `
+    --add-data "config.ini;." `
+    main.py
+```
+
+Важно: Для SQLite базы данных, в которую программа будет записывать данные (регистрация, заказы, настройки), лучше использовать подход с get_db_path(), а не встраивать её в .exe . Встроенная БД будет доступна только для чтения.
+
+Шаг 4: Использование spec-файла (для сложных проектов)
+
+Сначала создайте spec-файл:
+
+```bash
+pyinstaller --name "MyApp" --onefile --windowed main.py
+```
+
+Откройте MyApp.spec и настройте секцию datas :
+
+```python
+a = Analysis(
+    ['main.py'],
+    pathex=[os.path.abspath('.')],
+    datas=[
+        ('users.db', '.'),        # БД
+        ('assets', 'assets'),     # Папка с изображениями
+        ('config.ini', '.'),      # Конфиг
+    ],
+    hiddenimports=['customtkinter', 'bcrypt', 'PIL', 'sqlite3'],
+    # ... остальные настройки
+)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    name='MyApp',
+    debug=False,
+    console=False,           # False — без консоли, True — с консолью для отладки
+    icon=['assets/icon.ico'] # Иконка программы
+)
+```
+
+Затем соберите:
+
+```bash
+pyinstaller MyApp.spec
+```
+
+---
+
+🗂️ Структура проекта перед сборкой
+
+```
+МойПроект/
+├── main.py                 # Главный файл
+├── database.py             # Модули
+├── captcha_puzzle.py       # Модуль капчи
+├── users.db                # База данных (если нужна)
+├── production.db           # Вторая БД
+├── assets/                 # Папка с ресурсами
+│   ├── logo.png
+│   ├── default.png
+│   └── icon.ico
+├── config.ini              # Конфигурация (если есть)
+└── requirements.txt        # Зависимости
+```
+
+---
+
+🚨 Типичные проблемы и их решение
+
+Проблема Решение
+ModuleNotFoundError Добавьте модуль в hiddenimports или используйте --hidden-import=module_name 
+БД создаётся заново при каждом запуске БД должна быть рядом с .exe, а не внутри него. Используйте функцию get_db_path() 
+Не видны изображения/файлы Проверьте пути — используйте resource_path() для файлов, которые нужно читать
+Программа крашится без ошибок Соберите с console=True временно, чтобы увидеть ошибку
+Огромный размер .exe Используйте виртуальное окружение (установите только нужные библиотеки)
+
+---
+
+🔧 Дополнительные параметры PyInstaller
+
+```bash
+pyinstaller --onefile \
+            --windowed \
+            --name "Экзамен_2026" \
+            --icon "assets/icon.ico" \
+            --add-data "users.db;." \
+            --add-data "assets;assets" \
+            --hidden-import=bcrypt \
+            --hidden-import=PIL._tkinter_finder \
+            --uac-admin \
+            main.py
+```
+
+Параметр Что делает
+--name Задаёт имя .exe файла
+--icon Устанавливает иконку программы
+--add-data Добавляет файлы/папки в сборку
+--hidden-import Принудительно включает модуль
+--uac-admin Запрашивает права администратора
+--noconfirm Не спрашивать подтверждения
+--clean Очистить временные файлы
+
+---
+
+📋 Готовые команды для вашего проекта
+
+Для обычной сборки:
+
+```bash
+pyinstaller --onefile --windowed --name "DIPLOMA_2026" main.py
+```
+
+Для сборки со всеми файлами:
+
+```bash
+pyinstaller --onefile --windowed `
+    --name "Ekzamen_2026" `
+    --add-data "users.db;." `
+    --add-data "production.db;." `
+    --add-data "assets;assets" `
+    --hidden-import=customtkinter `
+    --hidden-import=bcrypt `
+    --hidden-import=PIL `
+    main.py
+```
+
+---
+
+💡 Где найти результат
+
+После успешной сборки:
+
+· .exe файл находится в папке dist/
+· Временные файлы сборки — в папке build/
+· Файл спецификации — имя_проекта.spec (сохраните его для повторной сборки)
+
+Для экзамена: скопируйте .exe файл и все нужные БД/конфиги в одну папку на флешку — программа будет работать с любого компьютера под Windows.
+
+---
+
+🎯 Важные моменты для демо-экзамена
+
+1. Перед экзаменом обязательно проверьте, что собранный .exe запускается на другом компьютере
+2. БД должны быть в той же папке, что и .exe (если вы не встроили их через --add-data)
+3. Проверьте работу капчи, авторизации и всех модулей в собранной версии
+4. Если программа не запускается, соберите временно с console=True и посмотрите ошибку
+
+Удачи на экзамене! Если что-то пойдёт не так при сборке — пишите, разберёмся.
