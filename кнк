@@ -1,0 +1,367 @@
+Pillow
+最后修改于 2024 年 1 月 29 日
+
+Pillow 教程展示了如何在 Python 中使用 Pillow 处理图像。 源代码可在作者的 Github 仓库中找到。
+
+Pillow
+Pillow 是一个 Python 图像库 (PIL)，它增加了对打开、操作和保存图像的支持。 当前版本可以识别和读取大量格式。 写入支持有意限制为最常用的交换和演示格式。
+
+Pillow 显示图像
+在第一个示例中，我们读取一个图像文件并在外部程序中显示它。
+
+show_image.py
+#!/usr/bin/python
+
+from PIL import Image
+import sys
+
+try:
+    tatras = Image.open("tatras.jpg")
+
+except IOError:
+    print("Unable to load image")
+    sys.exit(1)
+    
+tatras.show()
+该程序读取一个 JPG 图像并在外部应用程序中显示它。
+
+from PIL import Image
+从 PIL 模块中，我们包含 Image 类。
+
+tatras = Image.open("tatras.jpg")
+Image.open 方法读取图像文件。 Pillow 可以读取 30 多种不同的文件格式。
+
+tatras.show()
+show 方法主要用于调试目的。 它将图像保存到临时文件中，并在外部程序中显示它。 这可能是 Linux 上的 ImageMagic 或 Windows 上的 Paint。
+
+使用 Pillow 的基本图像信息
+Pillow 允许我们获取有关图像的一些基本信息。
+
+basic_info.py
+#!/usr/bin/python
+
+from PIL import Image
+import sys
+
+try:
+    tatras = Image.open("tatras.jpg")
+
+except IOError:
+    print("Unable to load image")
+    sys.exit(1)
+    
+print("Format: {0}\nSize: {1}\nMode: {2}".format(tatras.format, 
+    tatras.size, tatras.mode))
+该示例使用 Pillow 打印有关图像的基本信息。
+
+print("Format: {0}\nSize: {1}\nMode: {2}".format(tatras.format, 
+    tatras.size, tatras.mode)) 
+我们打印图像格式、大小和模式。
+
+$ ./basic_info.py 
+Format: JPEG
+Size: (350, 232)
+Mode: RGB
+Pillow 模糊图像
+ImageFilter 模块包含预定义的一组过滤器的定义，可以与 filter 方法一起使用。
+
+blur_image.py
+#!/usr/bin/python
+
+from PIL import Image, ImageFilter
+import sys
+
+try:
+    img = Image.open("tatras.jpg")
+    
+except IOError:
+    print("Unable to load image")    
+    sys.exit(1)
+
+blurred = img.filter(ImageFilter.BLUR)
+
+blurred.save("blurred.png")
+该程序加载一个图像，从原始图像创建一个模糊图像，并将新图像保存到磁盘上。
+
+from PIL import Image, ImageFilter
+我们导入 Image 和 ImageFilter 模块。
+
+blurred = img.filter(ImageFilter.BLUR)
+我们将 ImageFilter.BLUR 应用于原始图像； 该操作返回一个新的修改后的图像。
+
+blurred.save("blurred.png")
+使用 save 方法，我们将模糊图像保存到磁盘上。
+
+使用 Pillow 转换图像
+使用 save 方法，我们可以将图像转换为不同的格式。
+
+convert2png.py
+#!/usr/bin/python
+
+from PIL import Image
+import sys
+
+try:
+    tatras = Image.open("tatras.jpg")
+
+except IOError:
+    print("Unable to load image")
+    sys.exit(1)
+
+tatras.save('tatras.png', 'png')  
+该程序读取一个 JPG 图像并将其转换为 PNG 格式。
+
+tatras.save('tatras.png', 'png')  
+save 方法的第二个参数指定图像格式。
+
+Pillow 灰度图像
+使用 Image.convert 方法，我们可以生成黑白图像。
+
+grayscale.py
+#!/usr/bin/python
+
+from PIL import Image
+import sys
+
+try:
+    tatras = Image.open("tatras.jpg")
+    
+except IOError:
+    print("Unable to load image")
+    sys.exit(1)
+    
+grayscale = tatras.convert('L')
+grayscale.show()
+该程序读取一个图像并将其转换为灰度图像。
+
+grayscale = tatras.convert('L')
+convert 方法的第一个参数是模式； 'L' 模式是黑白的。
+
+使用 Pillow 裁剪图像
+Image.crop 裁剪图像。
+
+crop_image.py
+#!/usr/bin/python
+
+from PIL import Image
+import sys
+
+try:
+    tatras = Image.open("tatras.jpg")
+
+except IOError:
+    print("Unable to load image")
+    sys.exit(1)
+    
+cropped = tatras.crop((100, 100, 350, 350))
+cropped.save('tatras_cropped.jpg')
+该程序裁剪图像。 裁剪后的图像保存到磁盘上。
+
+cropped = tatras.crop((100, 100, 350, 350))
+crop 方法采用一个 4 元组，定义左、上、右和下像素坐标。
+
+使用 Pillow 旋转图像
+Image.rotate 返回图像的旋转副本。
+
+rotate_image.py
+#!/usr/bin/python
+
+from PIL import Image
+import sys
+
+try:
+    tatras = Image.open("tatras.jpg")
+
+except IOError:
+    print("Unable to load image")
+    sys.exit(1)
+    
+rotated = tatras.rotate(180)
+rotated.save('tatras_rotated.jpg') 
+该程序将图像旋转 180 度，并将新创建的图像保存到磁盘上。
+
+在 Tkinter 中显示图像
+以下程序在 Tkinter 程序中显示图像。
+
+show_tkinter.py
+#!/usr/bin/python
+
+from PIL import Image, ImageTk
+from tkinter import Tk
+from tkinter.ttk import Frame, Label
+import sys
+
+class Example(Frame):
+  
+    def __init__(self):
+        super().__init__()   
+         
+        self.loadImage() 
+        self.initUI()
+        
+        
+    def loadImage(self):
+        try:
+            self.img = Image.open("tatrs.jpg")
+
+        except IOError:
+            print("Unable to load image")
+            sys.exit(1)
+        
+    
+    def initUI(self):
+      
+        self.master.title("Label")
+        
+        tatras = ImageTk.PhotoImage(self.img)
+        label = Label(self, image=tatras)
+        
+        # reference must be stored
+        label.image = tatras
+        
+        label.pack()
+        self.pack()
+        
+        
+    def setGeometry(self):
+      
+        w, h = self.img.size
+        self.master.geometry(("%dx%d+300+300") % (w, h))
+        
+
+def main():
+  
+    root = Tk()
+    ex = Example()
+    ex.setGeometry()
+    root.mainloop()  
+
+
+if __name__ == '__main__':
+    main()  
+该程序在 Tkinter 工具包的 Label 小部件中显示图像。
+
+from PIL import Image, ImageTk
+ImageTk 是一个与 Tkinter 兼容的照片图像。 它可以用于 Tkinter 期望图像对象的任何地方。
+
+tatras = ImageTk.PhotoImage(self.img)
+我们创建一个照片图像。
+
+label = Label(self, image=tatras)
+该照片图像被赋予标签小部件的 image 参数。
+
+label.image = tatras
+为了不被垃圾回收，必须存储图像引用。
+
+w, h = self.img.size
+self.master.geometry(("%dx%d+300+300") % (w, h))
+窗口的大小适合图像大小。
+
+从 URL 读取图像
+下一个示例从 URL 读取图像。
+
+read_from_url.py
+#!/usr/bin/python
+
+from PIL import Image
+import requests
+import sys
+
+url = 'https://i.ytimg.com/vi/vEYsdh6uiS4/maxresdefault.jpg'
+
+try:
+    resp = requests.get(url, stream=True).raw
+
+except requests.exceptions.RequestException as e:  
+    sys.exit(1)
+
+try:
+    img = Image.open(resp)
+
+except IOError:
+    print("Unable to open image")
+    sys.exit(1)
+
+img.save('sid.jpg', 'jpeg')    
+该示例从 URL 读取图像并将其保存到磁盘上。
+
+import requests
+我们使用 requests 库下载图像。
+
+resp = requests.get(url, stream=True).raw
+我们将图像读取为原始数据。
+
+img = Image.open(resp)
+Image 是从响应对象创建的。
+
+img.save('sid.jpg', 'jpeg')
+该图像被保存。
+
+绘制到 Pillow 图像
+Pillow 具有一些基本的 2D 图形功能。 ImageDraw 模块为 Image 对象提供简单的 2D 图形。 我们可以创建新图像，注释或修饰现有图像，以及为 Web 使用动态生成图形。
+
+draw2image.py
+#!/usr/bin/python
+
+from PIL import Image, ImageDraw
+
+img = Image.new('RGBA', (200, 200), 'white')    
+idraw = ImageDraw.Draw(img)
+
+idraw.rectangle((10, 10, 100, 100), fill='blue')
+ 
+img.save('rectangle.png')
+该示例创建一个新图像并在图像上绘制一个蓝色矩形。
+
+img = Image.new('RGBA', (200, 200), 'white') 
+创建一个新的 Image。 图像模式为 'RGBA'。 其大小为 200x200，背景为白色。
+
+idraw = ImageDraw.Draw(img)
+从图像中，我们创建 ImageDraw 对象。 现在我们可以在图像上执行一些绘图操作。
+
+idraw.rectangle((10, 10, 100, 100), fill='blue')
+使用 rectangle 方法，我们在图像上绘制一个蓝色矩形。
+
+使用 Pillow 创建水印
+以下示例创建一个水印。
+
+watermark.py
+#!/usr/bin/python
+
+from PIL import Image, ImageDraw, ImageFont
+import sys
+
+try:
+    tatras = Image.open("tatras.jpg")
+
+except:
+    print("Unable to load image")
+    sys.exit(1)
+    
+idraw = ImageDraw.Draw(tatras)
+text = "High Tatras"
+
+font = ImageFont.truetype("arial.ttf", size=18)
+
+idraw.text((10, 10), text, font=font)
+ 
+tatras.save('tatras_watermarked.png')
+我们使用 ImageDraw 模块创建水印。
+
+font = ImageFont.truetype("arial.ttf", size=18)
+我们创建一个 18 大小的 Arial 字体。
+
+idraw.text((10, 10), text, font=font)
+使用 text 方法创建水印。 文本的默认颜色为白色。 我们使用创建的字体。
+
+High Tatras
+图：高塔特拉山
+来源
+Python pillow 文档
+
+在本文中，我们使用了 Python Pillow 库。
+
+作者
+我的名字是 Jan Bodnar，我是一位充满热情的程序员，拥有丰富的编程经验。 自 2007 年以来，我一直撰写编程文章。 迄今为止，我已经撰写了 1,400 多篇文章和 8 本电子书。 我在教授编程方面拥有超过十年的经验。
+
+列出所有 Python 教程。
