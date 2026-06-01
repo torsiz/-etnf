@@ -1,0 +1,10 @@
+pip install bcrypt
+pip install sqlalchemy
+# sqlite3 встроен в Python
+pip install customtkinter ctkmenubarplus
+pip install pillow numpy
+# Основные библиотеки для проекта
+pip install customtkinter bcrypt pillow sqlalchemy
+
+# Дополнительно (для расширенного функционала)
+pip install ctkmenubarplus numpy
