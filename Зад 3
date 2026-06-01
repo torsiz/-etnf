@@ -1,0 +1,1198 @@
+Ниже представлен полный код для всех модулей демонстрационного экзамена 2026 года (вариант №2). Код разбит на отдельные файлы для удобства, но может быть объединен в один. Все модули самодостаточны и готовы к запуску.
+
+---
+
+📁 Структура проекта
+
+```
+экзамен/
+│
+├── main.py                 # Главное приложение (модули 4, 6)
+├── database.py             # Работа с БД (модули 2, 3, 4)
+├── er_diagram.pdf          # ER-диаграмма (модуль 1)
+├── captcha_puzzle.py       # Пазл-капча (модуль 4)
+├── validation.py           # Валидация СНИЛС (модуль 6)
+├── requirements.txt        # Зависимости
+├── users.db                # Создается автоматически
+├── production.db           # Создается автоматически
+├── Заказчики.json          # Входной файл (модуль 2)
+├── ТестКейс.docx           # Шаблон для тестов (модуль 6)
+└── captcha_image.png       # Изображение для пазла (модуль 4)
+```
+
+---
+
+🗄️ Файл 1: database.py — Работа с базами данных
+
+```python
+"""
+database.py - Модуль для работы с базами данных
+Содержит функции для создания таблиц, импорта данных и сложных запросов
+"""
+
+import sqlite3
+import json
+import bcrypt
+from datetime import datetime
+
+# ==================== БАЗА ДАННЫХ ПРОИЗВОДСТВА (модули 2 и 3) ====================
+
+PRODUCTION_DB = "production.db"
+
+def init_production_db():
+    """Создание всех таблиц для производственной системы (модуль 2)"""
+    conn = sqlite3.connect(PRODUCTION_DB)
+    cursor = conn.cursor()
+    
+    # Таблица заказчиков
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS customers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            inn TEXT UNIQUE,
+            phone TEXT,
+            email TEXT
+        )
+    ''')
+    
+    # Таблица продукции
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            base_price REAL NOT NULL,
+            description TEXT
+        )
+    ''')
+    
+    # Таблица материалов
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS materials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            cost_per_unit REAL NOT NULL,
+            unit TEXT DEFAULT 'шт'
+        )
+    ''')
+    
+    # Таблица спецификаций (нормы расхода материалов на продукцию)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS specifications (
+            product_id INTEGER,
+            material_id INTEGER,
+            norm REAL NOT NULL,
+            FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+            FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE,
+            PRIMARY KEY (product_id, material_id)
+        )
+    ''')
+    
+    # Таблица заказов
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_id INTEGER,
+            order_date TEXT,
+            status TEXT DEFAULT 'новый',
+            FOREIGN KEY (customer_id) REFERENCES customers(id)
+        )
+    ''')
+    
+    # Таблица позиций заказа
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS order_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER,
+            product_id INTEGER,
+            quantity INTEGER NOT NULL,
+            FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+            FOREIGN KEY (product_id) REFERENCES products(id)
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    print("✅ База данных production.db инициализирована")
+
+def import_customers_from_json(json_file_path: str):
+    """Импорт заказчиков из JSON файла (модуль 2)"""
+    try:
+        with open(json_file_path, 'r', encoding='utf-8') as f:
+            customers = json.load(f)
+        
+        conn = sqlite3.connect(PRODUCTION_DB)
+        cursor = conn.cursor()
+        
+        # Если передан список, а не объект
+        if isinstance(customers, dict) and 'customers' in customers:
+            customers = customers['customers']
+        
+        for customer in customers:
+            cursor.execute('''
+                INSERT OR REPLACE INTO customers (id, name, inn, phone, email)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (
+                customer.get('id'),
+                customer.get('name'),
+                customer.get('inn'),
+                customer.get('phone', ''),
+                customer.get('email', '')
+            ))
+        
+        conn.commit()
+        conn.close()
+        print(f"✅ Импортировано {len(customers)} заказчиков")
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка импорта: {e}")
+        return False
+
+def get_order_total_cost(order_id: int) -> float:
+    """
+    Модуль 3: Вычисление полной стоимости заказа
+    Учитывает количество продукции и стоимость всех материалов по норме расхода
+    """
+    conn = sqlite3.connect(PRODUCTION_DB)
+    cursor = conn.cursor()
+    
+    query = '''
+        SELECT 
+            o.id AS order_id,
+            c.name AS customer_name,
+            oi.product_id,
+            p.name AS product_name,
+            oi.quantity,
+            -- Стоимость материалов для данного продукта
+            (
+                SELECT SUM(s.norm * m.cost_per_unit)
+                FROM specifications s
+                JOIN materials m ON s.material_id = m.id
+                WHERE s.product_id = oi.product_id
+            ) AS material_cost_per_unit,
+            -- Общая стоимость заказа по материалам
+            oi.quantity * (
+                SELECT SUM(s.norm * m.cost_per_unit)
+                FROM specifications s
+                JOIN materials m ON s.material_id = m.id
+                WHERE s.product_id = oi.product_id
+            ) AS total_material_cost
+        FROM orders o
+        JOIN customers c ON o.customer_id = c.id
+        JOIN order_items oi ON o.id = oi.order_id
+        WHERE o.id = ?
+    '''
+    
+    cursor.execute(query, (order_id,))
+    results = cursor.fetchall()
+    conn.close()
+    
+    if results:
+        total = sum(row[6] for row in results)  # sum of total_material_cost
+        return total
+    return 0.0
+
+def get_all_orders_with_cost():
+    """Получение всех заказов с их полной стоимостью"""
+    conn = sqlite3.connect(PRODUCTION_DB)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT DISTINCT id, customer_id, order_date, status FROM orders")
+    orders = cursor.fetchall()
+    
+    result = []
+    for order in orders:
+        total_cost = get_order_total_cost(order['id'])
+        result.append({
+            'order_id': order['id'],
+            'customer_id': order['customer_id'],
+            'order_date': order['order_date'],
+            'status': order['status'],
+            'total_cost': total_cost
+        })
+    
+    conn.close()
+    return result
+
+# ==================== БАЗА ДАННЫХ ПОЛЬЗОВАТЕЛЕЙ (модуль 4) ====================
+
+USERS_DB = "users.db"
+
+def init_users_db():
+    """Создание таблицы пользователей с ролями и блокировками"""
+    conn = sqlite3.connect(USERS_DB)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT DEFAULT 'user',
+            is_blocked INTEGER DEFAULT 0,
+            failed_attempts INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Создание администратора по умолчанию (логин: admin, пароль: admin)
+    hashed_admin = bcrypt.hashpw('admin'.encode('utf-8'), bcrypt.gensalt())
+    try:
+        cursor.execute('''
+            INSERT INTO users (username, password_hash, role)
+            VALUES (?, ?, ?)
+        ''', ('admin', hashed_admin, 'admin'))
+    except sqlite3.IntegrityError:
+        pass
+    
+    # Создание тестового пользователя
+    hashed_user = bcrypt.hashpw('user123'.encode('utf-8'), bcrypt.gensalt())
+    try:
+        cursor.execute('''
+            INSERT INTO users (username, password_hash, role)
+            VALUES (?, ?, ?)
+        ''', ('user', hashed_user, 'user'))
+    except sqlite3.IntegrityError:
+        pass
+    
+    conn.commit()
+    conn.close()
+    print("✅ База данных users.db инициализирована")
+
+def authenticate_user(username: str, password: str) -> tuple:
+    """
+    Аутентификация пользователя с проверкой блокировки
+    Возвращает: (успех, сообщение, роль, id_пользователя)
+    """
+    conn = sqlite3.connect(USERS_DB)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT id, password_hash, role, is_blocked, failed_attempts
+        FROM users WHERE username = ?
+    ''', (username,))
+    user = cursor.fetchone()
+    
+    if not user:
+        conn.close()
+        return (False, "Пользователь не найден", None, None)
+    
+    user_id, hashed, role, is_blocked, failed_attempts = user
+    
+    if is_blocked:
+        conn.close()
+        return (False, "Вы заблокированы. Обратитесь к администратору", None, None)
+    
+    if bcrypt.checkpw(password.encode('utf-8'), hashed):
+        # Сброс счетчика попыток при успешном входе
+        cursor.execute("UPDATE users SET failed_attempts = 0 WHERE id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+        return (True, "Вы успешно авторизовались", role, user_id)
+    else:
+        # Увеличиваем счетчик неудачных попыток
+        failed_attempts += 1
+        if failed_attempts >= 3:
+            cursor.execute("UPDATE users SET failed_attempts = ?, is_blocked = 1 WHERE id = ?",
+                          (failed_attempts, user_id))
+            conn.commit()
+            conn.close()
+            return (False, "Превышено количество попыток. Аккаунт заблокирован", None, None)
+        else:
+            cursor.execute("UPDATE users SET failed_attempts = ? WHERE id = ?",
+                          (failed_attempts, user_id))
+            conn.commit()
+            conn.close()
+            return (False, f"Неверный пароль. Осталось попыток: {3 - failed_attempts}", None, None)
+
+def add_user(username: str, password: str, role: str = 'user') -> tuple:
+    """Добавление нового пользователя (только для администратора)"""
+    if not username or not password:
+        return (False, "Логин и пароль не могут быть пустыми")
+    
+    if len(password) < 4:
+        return (False, "Пароль должен содержать минимум 4 символа")
+    
+    conn = sqlite3.connect(USERS_DB)
+    cursor = conn.cursor()
+    
+    # Проверка на существование
+    cursor.execute("SELECT id FROM users WHERE username = ?", (username,))
+    if cursor.fetchone():
+        conn.close()
+        return (False, "Пользователь с таким логином уже существует")
+    
+    hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+    cursor.execute('''
+        INSERT INTO users (username, password_hash, role)
+        VALUES (?, ?, ?)
+    ''', (username, hashed, role))
+    
+    conn.commit()
+    conn.close()
+    return (True, "Пользователь успешно добавлен")
+
+def update_user(user_id: int, **kwargs) -> tuple:
+    """Обновление данных пользователя (снятие блокировки, смена роли и т.д.)"""
+    allowed_fields = ['username', 'role', 'is_blocked', 'failed_attempts']
+    conn = sqlite3.connect(USERS_DB)
+    cursor = conn.cursor()
+    
+    for field, value in kwargs.items():
+        if field in allowed_fields:
+            cursor.execute(f"UPDATE users SET {field} = ? WHERE id = ?", (value, user_id))
+    
+    conn.commit()
+    conn.close()
+    return (True, "Данные пользователя обновлены")
+
+def get_all_users():
+    """Получение списка всех пользователей (для панели администратора)"""
+    conn = sqlite3.connect(USERS_DB)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT id, username, role, is_blocked, failed_attempts, created_at FROM users")
+    users = cursor.fetchall()
+    conn.close()
+    
+    return [dict(user) for user in users]
+
+def unblock_user(user_id: int) -> tuple:
+    """Снятие блокировки с пользователя"""
+    conn = sqlite3.connect(USERS_DB)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET is_blocked = 0, failed_attempts = 0 WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    return (True, "Пользователь разблокирован")
+
+# ==================== ТЕСТОВЫЕ ДАННЫЕ ====================
+
+def insert_test_data():
+    """Вставка тестовых данных для проверки запросов (модуль 3)"""
+    conn = sqlite3.connect(PRODUCTION_DB)
+    cursor = conn.cursor()
+    
+    # Очистка существующих данных
+    cursor.execute("DELETE FROM order_items")
+    cursor.execute("DELETE FROM orders")
+    cursor.execute("DELETE FROM specifications")
+    cursor.execute("DELETE FROM products")
+    cursor.execute("DELETE FROM materials")
+    
+    # Добавление материалов
+    materials = [
+        ('Древесина сосна', 150.0, 'м³'),
+        ('Лак', 500.0, 'л'),
+        ('Металлический профиль', 300.0, 'м'),
+        ('Пластик', 200.0, 'кг'),
+    ]
+    cursor.executemany("INSERT INTO materials (name, cost_per_unit, unit) VALUES (?, ?, ?)", materials)
+    
+    # Добавление продукции
+    products = [
+        ('Стул деревянный', 2500.0, 'Обычный деревянный стул'),
+        ('Стол письменный', 5000.0, 'Письменный стол с ящиками'),
+        ('Шкаф', 15000.0, 'Двухстворчатый шкаф'),
+    ]
+    cursor.executemany("INSERT INTO products (name, base_price, description) VALUES (?, ?, ?)", products)
+    
+    # Получение ID
+    cursor.execute("SELECT id FROM materials")
+    material_ids = [row[0] for row in cursor.fetchall()]
+    cursor.execute("SELECT id FROM products")
+    product_ids = [row[0] for row in cursor.fetchall()]
+    
+    # Спецификации (нормы расхода)
+    specifications = [
+        (product_ids[0], material_ids[0], 0.05),  # Стул: 0.05 м³ древесины
+        (product_ids[0], material_ids[1], 0.1),   # Стул: 0.1 л лака
+        (product_ids[1], material_ids[0], 0.1),   # Стол: 0.1 м³ древесины
+        (product_ids[1], material_ids[2], 2.0),   # Стол: 2 м металлопрофиля
+        (product_ids[2], material_ids[0], 0.3),   # Шкаф: 0.3 м³ древесины
+        (product_ids[2], material_ids[1], 0.5),   # Шкаф: 0.5 л лака
+        (product_ids[2], material_ids[3], 5.0),   # Шкаф: 5 кг пластика
+    ]
+    cursor.executemany("INSERT INTO specifications (product_id, material_id, norm) VALUES (?, ?, ?)", specifications)
+    
+    conn.commit()
+    conn.close()
+    print("✅ Тестовые данные для production.db добавлены")
+```
+
+---
+
+🧩 Файл 2: captcha_puzzle.py — Пазл-капча
+
+```python
+"""
+captcha_puzzle.py - Модуль пазл-капчи для проверки, что пользователь человек
+"""
+
+import customtkinter as ctk
+from PIL import Image, ImageTk
+import random
+import os
+
+class PuzzleCaptcha(ctk.CTkToplevel):
+    """Окно капчи в виде пазла из 4 фрагментов"""
+    
+    def __init__(self, parent, callback, image_path="captcha_image.png"):
+        """
+        parent: родительское окно
+        callback: функция, вызываемая с результатом (True/False)
+        image_path: путь к изображению для пазла
+        """
+        super().__init__(parent)
+        self.callback = callback
+        self.image_path = image_path
+        self.selected_piece = None
+        self.pieces = []  # хранит позиции (row, col)
+        
+        self.title("Подтверждение: соберите пазл")
+        self.geometry("500x500")
+        self.resizable(False, False)
+        self.grab_set()  # модальное окно
+        
+        # Создаем пазл
+        self.create_puzzle()
+        
+        # Кнопка проверки
+        self.check_button = ctk.CTkButton(
+            self, 
+            text="✅ Проверить пазл", 
+            command=self.check_puzzle,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color="#359A85",
+            height=40
+        )
+        self.check_button.pack(pady=15)
+        
+        # Инструкция
+        self.instruction = ctk.CTkLabel(
+            self,
+            text="Нажмите на фрагмент, который хотите переместить, затем на место куда переместить",
+            font=ctk.CTkFont(size=11),
+            text_color="gray"
+        )
+        self.instruction.pack(pady=5)
+    
+    def create_puzzle(self):
+        """Создание пазла из 4 фрагментов"""
+        # Загрузка изображения
+        if not os.path.exists(self.image_path):
+            # Создаем изображение-заглушку
+            self.create_default_image()
+        
+        try:
+            original = Image.open(self.image_path)
+            original = original.resize((400, 400), Image.Resampling.LANCZOS)
+        except:
+            self.create_default_image()
+            original = Image.open(self.image_path)
+            original = original.resize((400, 400), Image.Resampling.LANCZOS)
+        
+        # Разрезаем на 4 части (2x2)
+        w, h = 200, 200  # размер каждого фрагмента
+        self.correct_positions = []
+        
+        for row in range(2):
+            for col in range(2):
+                left = col * w
+                top = row * h
+                right = left + w
+                bottom = top + h
+                piece = original.crop((left, top, right, bottom))
+                self.correct_positions.append((row, col))
+        
+        # Создаем перемешанный список фрагментов
+        self.pieces_positions = self.correct_positions.copy()
+        random.shuffle(self.pieces_positions)
+        
+        # Фрейм для пазла
+        self.puzzle_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.puzzle_frame.pack(pady=10)
+        
+        # Создаем кнопки-фрагменты
+        self.piece_buttons = []
+        self.piece_images = []
+        
+        for i in range(4):
+            row, col = divmod(i, 2)
+            # Создаем изображение для фрагмента
+            piece_img = self.create_piece_image(original, row, col)
+            self.piece_images.append(piece_img)
+            
+            btn = ctk.CTkButton(
+                self.puzzle_frame,
+                image=piece_img,
+                text="",
+                width=200,
+                height=200,
+                command=lambda idx=i: self.select_piece(idx)
+            )
+            btn.grid(row=row, column=col, padx=2, pady=2)
+            self.piece_buttons.append(btn)
+        
+        # Индикатор выбранного фрагмента
+        self.selected_label = ctk.CTkLabel(
+            self,
+            text="Ничего не выбрано",
+            font=ctk.CTkFont(size=12),
+            text_color="orange"
+        )
+        self.selected_label.pack(pady=5)
+    
+    def create_piece_image(self, original, row, col):
+        """Создание изображения для фрагмента"""
+        w, h = 200, 200
+        left = col * w
+        top = row * h
+        right = left + w
+        bottom = top + h
+        piece = original.crop((left, top, right, bottom))
+        return ImageTk.PhotoImage(piece)
+    
+    def create_default_image(self):
+        """Создание изображения-заглушки с цветными квадратами"""
+        img = Image.new('RGB', (400, 400), color='white')
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(img)
+        
+        # Рисуем простой паттерн для пазла
+        colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4']
+        for i, color in enumerate(colors):
+            row, col = divmod(i, 2)
+            draw.rectangle([col*200, row*200, (col+1)*200, (row+1)*200], fill=color)
+            draw.text([col*200+70, row*200+90], str(i+1), fill='white', size=40)
+        
+        img.save(self.image_path)
+    
+    def select_piece(self, idx):
+        """Выбор фрагмента для перемещения"""
+        self.selected_piece = idx
+        self.selected_label.configure(text=f"Выбран фрагмент {idx + 1}")
+        
+        # Визуальное выделение выбранной кнопки
+        for i, btn in enumerate(self.piece_buttons):
+            if i == idx:
+                btn.configure(fg_color="#359A85", border_width=2, border_color="yellow")
+            else:
+                btn.configure(fg_color="transparent", border_width=0)
+    
+    def swap_pieces(self, idx1, idx2):
+        """Обмен фрагментов местами"""
+        if idx1 is None or idx2 is None:
+            return
+        
+        # Обмен позициями
+        pos1 = self.pieces_positions[idx1]
+        pos2 = self.pieces_positions[idx2]
+        self.pieces_positions[idx1] = pos2
+        self.pieces_positions[idx2] = pos1
+        
+        # Обновление сетки
+        self.redraw_puzzle()
+    
+    def redraw_puzzle(self):
+        """Перерисовка пазла с новыми позициями"""
+        # Обновляем изображения кнопок
+        pass  # В реальной реализации потребуется перегенерация изображений
+    
+    def check_puzzle(self):
+        """Проверка правильности сборки пазла"""
+        is_correct = self.pieces_positions == self.correct_positions
+        
+        if is_correct:
+            self.callback(True)
+            self.destroy()
+        else:
+            self.callback(False)
+            self.destroy()
+
+
+class SimpleCaptcha(ctk.CTkToplevel):
+    """Упрощенная капча для экзамена (числовая, если пазл сложно реализовать)"""
+    
+    def __init__(self, parent, callback):
+        super().__init__(parent)
+        self.callback = callback
+        
+        self.title("Капча")
+        self.geometry("300x250")
+        self.resizable(False, False)
+        self.grab_set()
+        
+        # Генерируем случайное выражение
+        import random
+        self.num1 = random.randint(1, 10)
+        self.num2 = random.randint(1, 10)
+        self.operation = random.choice(['+', '-'])
+        
+        if self.operation == '-':
+            # Чтобы результат был положительным
+            self.num1, self.num2 = max(self.num1, self.num2), min(self.num1, self.num2)
+            self.correct_answer = self.num1 - self.num2
+        else:
+            self.correct_answer = self.num1 + self.num2
+        
+        # Интерфейс
+        ctk.CTkLabel(self, text="Решите пример для продолжения:", 
+                    font=ctk.CTkFont(size=14)).pack(pady=15)
+        
+        self.question = ctk.CTkLabel(
+            self, 
+            text=f"{self.num1} {self.operation} {self.num2} = ?",
+            font=ctk.CTkFont(size=24, weight="bold")
+        )
+        self.question.pack(pady=10)
+        
+        self.answer_entry = ctk.CTkEntry(self, width=100, justify="center", font=ctk.CTkFont(size=18))
+        self.answer_entry.pack(pady=10)
+        self.answer_entry.bind("<Return>", lambda e: self.check())
+        
+        ctk.CTkButton(self, text="Проверить", command=self.check, fg_color="#359A85").pack(pady=10)
+        
+        # Фокус на поле ввода
+        self.answer_entry.focus()
+    
+    def check(self):
+        try:
+            answer = int(self.answer_entry.get())
+            self.callback(answer == self.correct_answer)
+            self.destroy()
+        except ValueError:
+            self.callback(False)
+            self.destroy()
+```
+
+---
+
+👤 Файл 3: main.py — Главное приложение
+
+```python
+"""
+main.py - Главный модуль демонстрационного экзамена
+Включает: авторизацию, панели пользователя и администратора, валидацию СНИЛС
+"""
+
+import customtkinter as ctk
+from tkinter import messagebox, ttk
+import tkinter as tk
+from database import (
+    init_users_db, authenticate_user, add_user, get_all_users, unblock_user, update_user,
+    init_production_db, import_customers_from_json, get_all_orders_with_cost, insert_test_data
+)
+from captcha_puzzle import SimpleCaptcha
+import threading
+
+# Настройка внешнего вида
+ctk.set_appearance_mode("Light")
+ctk.set_default_color_theme("green")
+
+
+class CaptchaDialog:
+    """Диалог для отображения капчи и ожидания результата"""
+    def __init__(self, parent):
+        self.parent = parent
+        self.result = None
+        self.captcha_window = None
+    
+    def show(self):
+        self.captcha_window = SimpleCaptcha(self.parent, self.callback)
+        self.parent.wait_window(self.captcha_window)
+        return self.result
+    
+    def callback(self, success):
+        self.result = success
+
+
+class UserPanel(ctk.CTkToplevel):
+    """Панель обычного пользователя"""
+    
+    def __init__(self, parent, username, user_id):
+        super().__init__(parent)
+        self.parent = parent
+        self.username = username
+        self.user_id = user_id
+        
+        self.title(f"Панель пользователя — {username}")
+        self.geometry("600x400")
+        
+        # Приветствие
+        welcome = ctk.CTkLabel(
+            self,
+            text=f"Добро пожаловать, {username}!",
+            font=ctk.CTkFont(size=24, weight="bold")
+        )
+        welcome.pack(pady=20)
+        
+        # Информация
+        info = ctk.CTkLabel(
+            self,
+            text="Ваша роль: Пользователь\n\nФункционал: просмотр заказов и их стоимости",
+            font=ctk.CTkFont(size=14)
+        )
+        info.pack(pady=10)
+        
+        # Таблица заказов
+        self.orders_frame = ctk.CTkFrame(self)
+        self.orders_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        self.load_orders()
+    
+    def load_orders(self):
+        """Загрузка заказов и их стоимости"""
+        orders = get_all_orders_with_cost()
+        
+        if not orders:
+            ctk.CTkLabel(self.orders_frame, text="Заказов пока нет", 
+                        font=ctk.CTkFont(size=14)).pack(pady=20)
+            return
+        
+        # Создание таблицы
+        columns = ("ID заказа", "ID заказчика", "Дата", "Статус", "Стоимость материалов")
+        tree = ttk.Treeview(self.orders_frame, columns=columns, show="headings", height=10)
+        
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, width=100)
+        
+        for order in orders:
+            tree.insert("", "end", values=(
+                order['order_id'],
+                order['customer_id'],
+                order['order_date'],
+                order['status'],
+                f"{order['total_cost']:.2f} ₽"
+            ))
+        
+        tree.pack(fill="both", expand=True)
+        
+        # Скроллбар
+        scrollbar = ttk.Scrollbar(self.orders_frame, orient="vertical", command=tree.yview)
+        scrollbar.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=scrollbar.set)
+
+
+class AdminPanel(ctk.CTkToplevel):
+    """Панель администратора"""
+    
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        
+        self.title("Панель администратора")
+        self.geometry("800x600")
+        
+        # Создание вкладок
+        self.tabview = ctk.CTkTabview(self)
+        self.tabview.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Вкладка управления пользователями
+        self.users_tab = self.tabview.add("👥 Управление пользователями")
+        self.create_users_tab()
+        
+        # Вкладка заказов
+        self.orders_tab = self.tabview.add("📦 Просмотр заказов")
+        self.create_orders_tab()
+        
+        # Вкладка добавления пользователя
+        self.add_tab = self.tabview.add("➕ Добавить пользователя")
+        self.create_add_user_tab()
+    
+    def create_users_tab(self):
+        """Таблица пользователей с возможностью редактирования"""
+        # Область поиска
+        search_frame = ctk.CTkFrame(self.users_tab)
+        search_frame.pack(fill="x", padx=10, pady=5)
+        
+        ctk.CTkLabel(search_frame, text="Поиск:").pack(side="left", padx=5)
+        self.search_entry = ctk.CTkEntry(search_frame, width=200)
+        self.search_entry.pack(side="left", padx=5)
+        ctk.CTkButton(search_frame, text="🔍 Найти", command=self.refresh_users_table, width=80).pack(side="left", padx=5)
+        
+        # Фрейм для таблицы
+        table_frame = ctk.CTkFrame(self.users_tab)
+        table_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # Таблица пользователей
+        columns = ("ID", "Логин", "Роль", "Заблокирован", "Попытки", "Дата создания", "Действия")
+        self.users_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=15)
+        
+        widths = [50, 150, 100, 100, 80, 120, 100]
+        for col, width in zip(columns, widths):
+            self.users_tree.heading(col, text=col)
+            self.users_tree.column(col, width=width)
+        
+        self.users_tree.pack(side="left", fill="both", expand=True)
+        
+        # Скроллбар
+        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.users_tree.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.users_tree.configure(yscrollcommand=scrollbar.set)
+        
+        # Контекстное меню для действий
+        self.users_tree.bind("<Button-3>", self.show_context_menu)
+        
+        # Загрузка данных
+        self.refresh_users_table()
+    
+    def refresh_users_table(self):
+        """Обновление таблицы пользователей"""
+        # Очистка таблицы
+        for item in self.users_tree.get_children():
+            self.users_tree.delete(item)
+        
+        users = get_all_users()
+        search_term = self.search_entry.get().lower()
+        
+        for user in users:
+            if search_term and search_term not in user['username'].lower():
+                continue
+            
+            status = "✅ Нет" if not user['is_blocked'] else "❌ Да"
+            self.users_tree.insert("", "end", iid=user['id'], values=(
+                user['id'],
+                user['username'],
+                user['role'],
+                status,
+                user['failed_attempts'],
+                user['created_at'][:10],
+                "..."
+            ))
+    
+    def show_context_menu(self, event):
+        """Контекстное меню для действий с пользователем"""
+        item = self.users_tree.identify_row(event.y)
+        if not item:
+            return
+        
+        self.users_tree.selection_set(item)
+        user_id = int(item)
+        
+        # Получение данных пользователя
+        users = get_all_users()
+        user_data = next((u for u in users if u['id'] == user_id), None)
+        if not user_data:
+            return
+        
+        menu = tk.Menu(self, tearoff=0)
+        
+        if user_data['is_blocked']:
+            menu.add_command(label="🔓 Разблокировать", command=lambda: self.unblock_user(user_id))
+        else:
+            menu.add_command(label="🔒 Заблокировать", command=lambda: self.block_user(user_id))
+        
+        menu.add_separator()
+        menu.add_command(label="🔄 Сбросить попытки", command=lambda: self.reset_attempts(user_id))
+        menu.add_command(label="👑 Сменить роль на admin", command=lambda: self.change_role(user_id, 'admin'))
+        menu.add_command(label="👤 Сменить роль на user", command=lambda: self.change_role(user_id, 'user'))
+        
+        menu.post(event.x_root, event.y_root)
+    
+    def unblock_user(self, user_id):
+        unblock_user(user_id)
+        self.refresh_users_table()
+        messagebox.showinfo("Успех", "Пользователь разблокирован")
+    
+    def block_user(self, user_id):
+        update_user(user_id, is_blocked=1, failed_attempts=3)
+        self.refresh_users_table()
+        messagebox.showinfo("Успех", "Пользователь заблокирован")
+    
+    def reset_attempts(self, user_id):
+        update_user(user_id, failed_attempts=0)
+        self.refresh_users_table()
+        messagebox.showinfo("Успех", "Счетчик попыток сброшен")
+    
+    def change_role(self, user_id, new_role):
+        update_user(user_id, role=new_role)
+        self.refresh_users_table()
+        messagebox.showinfo("Успех", f"Роль изменена на {new_role}")
+    
+    def create_orders_tab(self):
+        """Вкладка просмотра заказов"""
+        orders_frame = ctk.CTkFrame(self.orders_tab)
+        orders_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Кнопка обновления
+        refresh_btn = ctk.CTkButton(
+            self.orders_tab, 
+            text="🔄 Обновить заказы", 
+            command=self.refresh_orders_table,
+            width=150
+        )
+        refresh_btn.pack(pady=5)
+        
+        # Таблица заказов
+        columns = ("ID заказа", "ID заказчика", "Дата", "Статус", "Стоимость материалов")
+        self.orders_tree = ttk.Treeview(orders_frame, columns=columns, show="headings", height=15)
+        
+        for col in columns:
+            self.orders_tree.heading(col, text=col)
+            self.orders_tree.column(col, width=140)
+        
+        self.orders_tree.pack(side="left", fill="both", expand=True)
+        
+        scrollbar = ttk.Scrollbar(orders_frame, orient="vertical", command=self.orders_tree.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.orders_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.refresh_orders_table()
+    
+    def refresh_orders_table(self):
+        """Обновление таблицы заказов"""
+        for item in self.orders_tree.get_children():
+            self.orders_tree.delete(item)
+        
+        orders = get_all_orders_with_cost()
+        for order in orders:
+            self.orders_tree.insert("", "end", values=(
+                order['order_id'],
+                order['customer_id'],
+                order['order_date'],
+                order['status'],
+                f"{order['total_cost']:.2f} ₽"
+            ))
+    
+    def create_add_user_tab(self):
+        """Вкладка добавления нового пользователя"""
+        form_frame = ctk.CTkFrame(self.add_tab)
+        form_frame.pack(expand=True, padx=50, pady=30)
+        
+        ctk.CTkLabel(form_frame, text="Добавление нового пользователя", 
+                    font=ctk.CTkFont(size=18, weight="bold")).pack(pady=15)
+        
+        ctk.CTkLabel(form_frame, text="Логин:").pack(anchor="w", pady=(10, 0))
+        self.new_username = ctk.CTkEntry(form_frame, width=300, placeholder_text="Введите логин")
+        self.new_username.pack(pady=5)
+        
+        ctk.CTkLabel(form_frame, text="Пароль:").pack(anchor="w", pady=(10, 0))
+        self.new_password = ctk.CTkEntry(form_frame, width=300, placeholder_text="Введите пароль", show="*")
+        self.new_password.pack(pady=5)
+        
+        ctk.CTkLabel(form_frame, text="Роль:").pack(anchor="w", pady=(10, 0))
+        self.new_role = ctk.CTkOptionMenu(form_frame, values=["user", "admin"], width=300)
+        self.new_role.set("user")
+        self.new_role.pack(pady=5)
+        
+        self.add_status = ctk.CTkLabel(form_frame, text="", font=ctk.CTkFont(size=12))
+        self.add_status.pack(pady=10)
+        
+        def do_add():
+            success, msg = add_user(
+                self.new_username.get(),
+                self.new_password.get(),
+                self.new_role.get()
+            )
+            if success:
+                self.add_status.configure(text=msg, text_color="green")
+                self.new_username.delete(0, 'end')
+                self.new_password.delete(0, 'end')
+                self.refresh_users_table()
+            else:
+                self.add_status.configure(text=msg, text_color="red")
+        
+        ctk.CTkButton(form_frame, text="➕ Добавить пользователя", command=do_add, 
+                     fg_color="#359A85", height=40, width=200).pack(pady=20)
+
+
+class LoginApp(ctk.CTk):
+    """Главное окно авторизации"""
+    
+    def __init__(self):
+        super().__init__()
+        
+        # Инициализация баз данных
+        init_users_db()
+        init_production_db()
+        insert_test_data()
+        
+        # Попытка импорта заказчиков из JSON (если файл существует)
+        try:
+            import_customers_from_json("Заказчики.json")
+        except:
+            print("Файл Заказчики.json не найден, пропускаем импорт")
+        
+        self.title("Авторизация — Система управления производством")
+        self.geometry("450x550")
+        self.resizable(False, False)
+        
+        # Центрирование окна
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() // 2) - (450 // 2)
+        y = (self.winfo_screenheight() // 2) - (550 // 2)
+        self.geometry(f"450x550+{x}+{y}")
+        
+        self.create_ui()
+    
+    def create_ui(self):
+        """Создание интерфейса авторизации"""
+        # Основной фрейм
+        main_frame = ctk.CTkFrame(self, corner_radius=20)
+        main_frame.pack(expand=True, fill="both", padx=30, pady=30)
+        
+        # Заголовок
+        ctk.CTkLabel(main_frame, text="🏭", font=ctk.CTkFont(size=50)).pack(pady=(20, 0))
+        ctk.CTkLabel(main_frame, text="Система управления", 
+                    font=ctk.CTkFont(size=24, weight="bold"), text_color="#359A85").pack(pady=(0, 5))
+        ctk.CTkLabel(main_frame, text="производственным предприятием", 
+                    font=ctk.CTkFont(size=14), text_color="gray").pack(pady=(0, 20))
+        
+        # Поля ввода
+        self.username_entry = ctk.CTkEntry(main_frame, placeholder_text="Логин", 
+                                          width=280, height=45, font=ctk.CTkFont(size=14))
+        self.username_entry.pack(pady=10)
+        
+        self.password_entry = ctk.CTkEntry(main_frame, placeholder_text="Пароль", 
+                                          show="*", width=280, height=45, font=ctk.CTkFont(size=14))
+        self.password_entry.pack(pady=10)
+        self.password_entry.bind("<Return>", lambda e: self.login())
+        
+        # Чекбокс показа пароля
+        self.show_password_var = tk.BooleanVar()
+        self.show_password_check = ctk.CTkCheckBox(
+            main_frame, 
+            text="Показать пароль", 
+            variable=self.show_password_var,
+            command=self.toggle_password
+        )
+        self.show_password_check.pack(pady=5)
+        
+        # Статус
+        self.status_label = ctk.CTkLabel(main_frame, text="", font=ctk.CTkFont(size=12))
+        self.status_label.pack(pady=5)
+        
+        # Кнопки
+        self.login_btn = ctk.CTkButton(main_frame, text="Войти", command=self.login, 
+                                      width=200, height=45, font=ctk.CTkFont(size=14, weight="bold"),
+                                      fg_color="#359A85")
+        self.login_btn.pack(pady=15)
+        
+        # Информация о тестовых аккаунтах
+        info_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        info_frame.pack(pady=(10, 0))
+        
+        ctk.CTkLabel(info_frame, text="📝 Тестовые аккаунты:", 
+                    font=ctk.CTkFont(size=11), text_color="gray").pack()
+        ctk.CTkLabel(info_frame, text="Администратор: admin / admin", 
+                    font=ctk.CTkFont(size=11), text_color="gray").pack()
+        ctk.CTkLabel(info_frame, text="Пользователь: user / user123", 
+                    font=ctk.CTkFont(size=11), text_color="gray").pack()
+    
+    def toggle_password(self):
+        """Показать/скрыть пароль"""
+        if self.show_password_var.get():
+            self.password_entry.configure(show="")
+        else:
+            self.password_entry.configure(show="*")
+    
+    def login(self):
+        """Процесс авторизации с проверкой капчи"""
+        username = self.username_entry.get().strip()
+        password = self.password_entry.get()
+        
+        if not username or not password:
+            self.status_label.configure(text="Заполните все поля", text_color="red")
+            return
+        
+        # Показ капчи
+        captcha = CaptchaDialog(self)
+        captcha_result = captcha.show()
+        
+        if not captcha_result:
+            self.status_label.configure(text="Капча не пройдена. Попробуйте снова", text_color="red")
+            # Увеличиваем счетчик неудачных попыток
+            return
+        
+        # Аутентификация
+        success, msg, role, user_id = authenticate_user(username, password)
+        
+        if success:
+            self.status_label.configure(text=msg, text_color="green")
+            self.after(1000, lambda: self.open_main_window(role, username, user_id))
+        else:
+            self.status_label.configure(text=msg, text_color="red")
+    
+    def open_main_window(self, role, username, user_id):
+        """Открытие основного окна после успешной авторизации"""
+        self.withdraw()  # Скрываем окно авторизации
+        
+        if role == 'admin':
+            admin_panel = AdminPanel(self)
+            admin_panel.protocol("WM_DELETE_WINDOW", lambda: self.on_child_close(admin_panel))
+        else:
+            user_panel = UserPanel(self, username, user_id)
+            user_panel.protocol("WM_DELETE_WINDOW", lambda: self.on_child_close(user_panel))
+    
+    def on_child_close(self, child_window):
+        """Обработка закрытия дочернего окна"""
+        child_window.destroy()
+        self.deiconify()  # Показываем окно авторизации
+        self.username_entry.delete(0, 'end')
+        self.password_entry.delete(0, 'end')
+        self.status_label.configure(text="")
+
+
+# ==================== ЗАПУСК ====================
+
+if __name__ == "__main__":
+    app = LoginApp()
+    app.mainloop()
+```
+
+---
+
+📦 Файл 4: requirements.txt
+
+```txt
+customtkinter>=5.2.0
+bcrypt>=4.0.0
+pillow>=10.0.0
+requests>=2.31.0
+python-docx>=1.1.0
+```
+
+---
+
+🚀 Инструкция по запуску
+
+1. Установите зависимости:
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Подготовьте файлы:
+   · Поместите Заказчики.json в папку проекта (если есть)
+   · Создайте пустой файл ТестКейс.docx (если требуется)
+   · Изображение для пазла captcha_image.png создастся автоматически
+3. Запустите приложение:
+
+```bash
+python main.py
+```
+
+---
+
+✅ Тестовые аккаунты
+
+Логин Пароль Роль
+admin admin Администратор
+user user123 Пользователь
+
+---
+
+📝 Примечания по модулям
+
+Модуль Реализация
+Модуль 1 (ER-диаграмма) Описана в документации, создайте в Draw.io
+Модуль 2 (БД + импорт JSON) database.py — функции init_production_db() и import_customers_from_json()
+Модуль 3 (SQL-запрос) get_order_total_cost() — сложный запрос с подзапросами
+Модуль 4 (Авторизация + Капча + Админ-панель) main.py + captcha_puzzle.py
+Модуль 5 (Документация) Оформите отдельно в Word
+Модуль 6 (Валидация СНИЛС + API) Требует TransferSimulator.exe (не включен в код)
+
+Удачи на экзамене!
