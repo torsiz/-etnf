@@ -1,0 +1,490 @@
+"""
+Система управления пользователями (User Management System)
+Технологии: customtkinter, sqlite3
+Функционал: CRUD операции с пользователями (Create, Read, Update, Delete)
+Соответствие требованиям ДЭ: модуль 2 — разработка тестовых сценариев для ПО
+"""
+
+import sqlite3
+from datetime import datetime
+from tkinter import messagebox, ttk
+import customtkinter as ctk
+
+# Настройка внешнего вида customtkinter
+ctk.set_appearance_mode("System")  # Режимы: "System", "Dark", "Light"
+ctk.set_default_color_theme("blue")  # Темы: "blue", "green", "dark-blue"
+
+class Database:
+    """Класс для работы с базой данных SQLite"""
+    
+    def __init__(self, db_path="users.db"):
+        self.connection = None
+        self.db_path = db_path
+        self.init_database()
+    
+    def init_database(self):
+        """Инициализация базы данных и создание таблицы пользователей"""
+        try:
+            self.connection = sqlite3.connect(self.db_path)
+            cursor = self.connection.cursor()
+            
+            # Создание таблицы users
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL UNIQUE,
+                    email TEXT NOT NULL,
+                    full_name TEXT,
+                    role TEXT DEFAULT 'user',
+                    created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.connection.commit()
+        except sqlite3.Error as e:
+            print(f"Ошибка базы данных: {e}")
+            messagebox.showerror("Ошибка БД", f"Не удалось инициализировать БД: {e}")
+    
+    def get_connection(self):
+        """Получить соединение с БД"""
+        if self.connection is None:
+            self.connection = sqlite3.connect(self.db_path)
+        return self.connection
+    
+    def close(self):
+        """Закрыть соединение с БД"""
+        if self.connection:
+            self.connection.close()
+            self.connection = None
+    
+    # --- CRUD Операции ---
+    
+    def add_user(self, username, email, full_name, role="user"):
+        """Добавление нового пользователя"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO users (username, email, full_name, role)
+                VALUES (?, ?, ?, ?)
+            """, (username, email, full_name, role))
+            conn.commit()
+            return True, "Пользователь успешно добавлен"
+        except sqlite3.IntegrityError:
+            return False, "Пользователь с таким именем уже существует"
+        except sqlite3.Error as e:
+            return False, f"Ошибка БД: {e}"
+    
+    def get_all_users(self):
+        """Получение всех пользователей"""
+        try:
+            cursor = self.get_connection().cursor()
+            cursor.execute("SELECT * FROM users ORDER BY id")
+            return cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Ошибка получения пользователей: {e}")
+            return []
+    
+    def get_user_by_id(self, user_id):
+        """Получение пользователя по ID"""
+        try:
+            cursor = self.get_connection().cursor()
+            cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+            return cursor.fetchone()
+        except sqlite3.Error as e:
+            print(f"Ошибка получения пользователя: {e}")
+            return None
+    
+    def update_user(self, user_id, username, email, full_name, role):
+        """Обновление данных пользователя"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE users 
+                SET username = ?, email = ?, full_name = ?, role = ?
+                WHERE id = ?
+            """, (username, email, full_name, role, user_id))
+            conn.commit()
+            return True, "Пользователь обновлен"
+        except sqlite3.Error as e:
+            return False, f"Ошибка обновления: {e}"
+    
+    def delete_user(self, user_id):
+        """Удаление пользователя"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            conn.commit()
+            return True, "Пользователь удален"
+        except sqlite3.Error as e:
+            return False, f"Ошибка удаления: {e}"
+    
+    def search_users(self, search_term):
+        """Поиск пользователей по имени или email"""
+        try:
+            cursor = self.get_connection().cursor()
+            cursor.execute("""
+                SELECT * FROM users 
+                WHERE username LIKE ? OR email LIKE ? OR full_name LIKE ?
+                ORDER BY id
+            """, (f'%{search_term}%', f'%{search_term}%', f'%{search_term}%'))
+            return cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Ошибка поиска: {e}")
+            return []
+
+
+class UserManagementApp(ctk.CTk):
+    """Главное окно приложения"""
+    
+    def __init__(self):
+        super().__init__()
+        
+        # Инициализация БД
+        self.db = Database()
+        
+        # Настройка окна
+        self.title("User Management System")
+        self.geometry("1200x700")
+        
+        # Создание UI
+        self.create_widgets()
+        
+        # Загрузка данных
+        self.refresh_user_table()
+        
+        # Настройка обработчика закрытия
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+    
+    def create_widgets(self):
+        """Создание всех виджетов интерфейса"""
+        
+        # Основной контейнер с отступами
+        self.main_frame = ctk.CTkFrame(self)
+        self.main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # ========== Левая панель: Форма ввода ==========
+        self.form_frame = ctk.CTkFrame(self.main_frame, width=350)
+        self.form_frame.pack(side="left", fill="y", padx=(0, 20))
+        self.form_frame.pack_propagate(False)
+        
+        # Заголовок формы
+        ctk.CTkLabel(
+            self.form_frame, 
+            text="Управление пользователями", 
+            font=ctk.CTkFont(size=20, weight="bold")
+        ).pack(pady=(20, 10))
+        
+        # Поля ввода
+        self.create_entry_field("Имя пользователя:", "username")
+        self.create_entry_field("Email:", "email")
+        self.create_entry_field("Полное имя:", "full_name")
+        
+        # Выпадающий список для роли
+        ctk.CTkLabel(self.form_frame, text="Роль:").pack(anchor="w", padx=30, pady=(10, 5))
+        self.role_combobox = ctk.CTkComboBox(
+            self.form_frame,
+            values=["user", "admin", "moderator"],
+            state="readonly"
+        )
+        self.role_combobox.set("user")
+        self.role_combobox.pack(fill="x", padx=30, pady=(0, 10))
+        
+        # ID для редактирования (скрытое поле)
+        self.edit_id = None
+        
+        # ID Label (отображение режима)
+        self.mode_label = ctk.CTkLabel(
+            self.form_frame, 
+            text="Режим: Добавление нового",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.mode_label.pack(pady=(10, 5))
+        
+        # Кнопки управления
+        button_frame = ctk.CTkFrame(self.form_frame)
+        button_frame.pack(pady=20, fill="x", padx=30)
+        
+        self.add_button = ctk.CTkButton(
+            button_frame, 
+            text="➕ Добавить", 
+            command=self.add_user,
+            fg_color="#2ecc71",
+            hover_color="#27ae60"
+        )
+        self.add_button.pack(fill="x", pady=5)
+        
+        self.update_button = ctk.CTkButton(
+            button_frame, 
+            text="✏️ Обновить", 
+            command=self.update_user,
+            fg_color="#f39c12",
+            hover_color="#e67e22",
+            state="disabled"
+        )
+        self.update_button.pack(fill="x", pady=5)
+        
+        self.cancel_button = ctk.CTkButton(
+            button_frame,
+            text="❌ Отменить редактирование",
+            command=self.cancel_edit,
+            fg_color="#95a5a6",
+            hover_color="#7f8c8d",
+            state="disabled"
+        )
+        self.cancel_button.pack(fill="x", pady=5)
+        
+        # ========== Правая панель: Таблица и поиск ==========
+        right_frame = ctk.CTkFrame(self.main_frame)
+        right_frame.pack(side="right", fill="both", expand=True)
+        
+        # Панель поиска
+        search_frame = ctk.CTkFrame(right_frame)
+        search_frame.pack(fill="x", padx=10, pady=(10, 5))
+        
+        ctk.CTkLabel(search_frame, text="🔍 Поиск:").pack(side="left", padx=(10, 5))
+        self.search_entry = ctk.CTkEntry(search_frame, placeholder_text="Поиск по имени или email...")
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        
+        self.search_button = ctk.CTkButton(
+            search_frame,
+            text="Найти",
+            command=self.search_users,
+            width=80
+        )
+        self.search_button.pack(side="left", padx=(0, 5))
+        
+        self.reset_button = ctk.CTkButton(
+            search_frame,
+            text="Сброс",
+            command=self.reset_search,
+            width=80,
+            fg_color="#7f8c8d"
+        )
+        self.reset_button.pack(side="left")
+        
+        # Статистика
+        self.stats_label = ctk.CTkLabel(right_frame, text="Всего записей: 0")
+        self.stats_label.pack(pady=(10, 5))
+        
+        # Таблица (Treeview)
+        table_frame = ctk.CTkFrame(right_frame)
+        table_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Создание стилизованной таблицы
+        columns = ("ID", "Имя пользователя", "Email", "Полное имя", "Роль", "Дата создания")
+        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=20)
+        
+        # Настройка колонок
+        self.tree.heading("ID", text="ID")
+        self.tree.heading("Имя пользователя", text="Имя пользователя")
+        self.tree.heading("Email", text="Email")
+        self.tree.heading("Полное имя", text="Полное имя")
+        self.tree.heading("Роль", text="Роль")
+        self.tree.heading("Дата создания", text="Дата создания")
+        
+        self.tree.column("ID", width=50)
+        self.tree.column("Имя пользователя", width=150)
+        self.tree.column("Email", width=200)
+        self.tree.column("Полное имя", width=150)
+        self.tree.column("Роль", width=100)
+        self.tree.column("Дата создания", width=150)
+        
+        # Скроллбары
+        v_scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=v_scrollbar.set)
+        
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        
+        table_frame.grid_rowconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
+        
+        # Кнопка удаления
+        delete_frame = ctk.CTkFrame(right_frame)
+        delete_frame.pack(fill="x", padx=10, pady=(0, 10))
+        
+        self.delete_button = ctk.CTkButton(
+            delete_frame,
+            text="🗑️ Удалить выбранного пользователя",
+            command=self.delete_user,
+            fg_color="#e74c3c",
+            hover_color="#c0392b"
+        )
+        self.delete_button.pack(side="right", padx=5)
+        
+        # Привязка события выбора в таблице
+        self.tree.bind("<<TreeviewSelect>>", self.on_select_user)
+        
+        # Привязка клавиши Enter к поиску
+        self.search_entry.bind("<Return>", lambda event: self.search_users())
+    
+    def create_entry_field(self, label_text, field_name):
+        """Создание поля ввода с заголовком"""
+        ctk.CTkLabel(self.form_frame, text=label_text).pack(anchor="w", padx=30, pady=(10, 5))
+        entry = ctk.CTkEntry(self.form_frame, width=280)
+        entry.pack(fill="x", padx=30, pady=(0, 5))
+        setattr(self, f"{field_name}_entry", entry)
+    
+    def clear_form(self):
+        """Очистка формы"""
+        self.username_entry.delete(0, "end")
+        self.email_entry.delete(0, "end")
+        self.full_name_entry.delete(0, "end")
+        self.role_combobox.set("user")
+    
+    def add_user(self):
+        """Добавление нового пользователя"""
+        username = self.username_entry.get().strip()
+        email = self.email_entry.get().strip()
+        full_name = self.full_name_entry.get().strip()
+        role = self.role_combobox.get()
+        
+        # Валидация
+        if not username or not email:
+            messagebox.showwarning("Предупреждение", "Имя пользователя и Email обязательны для заполнения")
+            return
+        
+        success, message = self.db.add_user(username, email, full_name, role)
+        
+        if success:
+            messagebox.showinfo("Успех", message)
+            self.clear_form()
+            self.refresh_user_table()
+        else:
+            messagebox.showerror("Ошибка", message)
+    
+    def refresh_user_table(self):
+        """Обновление таблицы пользователей"""
+        # Очистка таблицы
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        # Получение данных
+        users = self.db.get_all_users()
+        
+        # Заполнение таблицы
+        for user in users:
+            self.tree.insert("", "end", values=user)
+        
+        # Обновление статистики
+        self.stats_label.configure(text=f"Всего записей: {len(users)}")
+    
+    def on_select_user(self, event):
+        """Обработка выбора пользователя в таблице"""
+        selected = self.tree.selection()
+        if not selected:
+            return
+        
+        # Получение данных выбранной записи
+        values = self.tree.item(selected[0], "values")
+        
+        # Заполнение формы для редактирования
+        self.edit_id = values[0]
+        self.username_entry.delete(0, "end")
+        self.username_entry.insert(0, values[1])
+        self.email_entry.delete(0, "end")
+        self.email_entry.insert(0, values[2])
+        self.full_name_entry.delete(0, "end")
+        self.full_name_entry.insert(0, values[3])
+        self.role_combobox.set(values[4])
+        
+        # Обновление UI для режима редактирования
+        self.mode_label.configure(text=f"Режим: Редактирование (ID: {self.edit_id})")
+        self.add_button.configure(state="disabled")
+        self.update_button.configure(state="normal")
+        self.cancel_button.configure(state="normal")
+    
+    def update_user(self):
+        """Обновление данных пользователя"""
+        if not self.edit_id:
+            return
+        
+        username = self.username_entry.get().strip()
+        email = self.email_entry.get().strip()
+        full_name = self.full_name_entry.get().strip()
+        role = self.role_combobox.get()
+        
+        if not username or not email:
+            messagebox.showwarning("Предупреждение", "Имя пользователя и Email обязательны")
+            return
+        
+        success, message = self.db.update_user(self.edit_id, username, email, full_name, role)
+        
+        if success:
+            messagebox.showinfo("Успех", message)
+            self.cancel_edit()
+            self.refresh_user_table()
+        else:
+            messagebox.showerror("Ошибка", message)
+    
+    def cancel_edit(self):
+        """Отмена редактирования"""
+        self.edit_id = None
+        self.clear_form()
+        self.mode_label.configure(text="Режим: Добавление нового")
+        self.add_button.configure(state="normal")
+        self.update_button.configure(state="disabled")
+        self.cancel_button.configure(state="disabled")
+    
+    def delete_user(self):
+        """Удаление выбранного пользователя"""
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Предупреждение", "Выберите пользователя для удаления")
+            return
+        
+        values = self.tree.item(selected[0], "values")
+        
+        # Подтверждение удаления
+        if messagebox.askyesno("Подтверждение", f"Удалить пользователя '{values[1]}'?"):
+            success, message = self.db.delete_user(values[0])
+            
+            if success:
+                messagebox.showinfo("Успех", message)
+                self.cancel_edit()
+                self.refresh_user_table()
+            else:
+                messagebox.showerror("Ошибка", message)
+    
+    def search_users(self):
+        """Поиск пользователей"""
+        search_term = self.search_entry.get().strip()
+        
+        if not search_term:
+            self.refresh_user_table()
+            return
+        
+        # Очистка таблицы
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        # Поиск
+        results = self.db.search_users(search_term)
+        
+        for user in results:
+            self.tree.insert("", "end", values=user)
+        
+        self.stats_label.configure(text=f"Найдено записей: {len(results)}")
+    
+    def reset_search(self):
+        """Сброс поиска"""
+        self.search_entry.delete(0, "end")
+        self.refresh_user_table()
+    
+    def on_closing(self):
+        """Обработка закрытия приложения"""
+        self.db.close()
+        self.destroy()
+
+
+# ========== Точка входа ==========
+if __name__ == "__main__":
+    app = UserManagementApp()
+    app.mainloop()
+
+
+
+    pip install customtkinter
+    python user_management.py
